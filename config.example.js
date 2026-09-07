@@ -5,5 +5,5 @@ window.APP_CONFIG = {
   SUPABASE_URL: 'https://YOUR_PROJECT.supabase.co',
   SUPABASE_PUBLISHABLE_KEY: 'YOUR_PUBLISHABLE_OR_ANON_KEY',
   USERNAME_DOMAIN: 'users.local',
-  APP_NAME: 'Prescription Tracker'
+  APP_NAME: 'Prescription Tracker by ED&G\u2122'
 }

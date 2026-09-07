@@ -4,7 +4,7 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <meta name="robots" content="noindex,nofollow" />
-  <title>Prescription Tracker</title>
+  <title>Prescription Tracker by ED&amp;G&trade;</title>
   <link rel="stylesheet" href="css/app.css" />
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
   <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
@@ -15,8 +15,9 @@
 
   <section id="login-screen" class="login-shell">
     <div class="login-card">
-      <div class="brand-mark">Rx</div>
+      <div class="brand-mark">RxT</div>
       <h1>Prescription Tracker</h1>
+      <p class="brand-by">by ED&amp;G&trade;</p>
       <p class="muted">Dispensary workflow, audit and turnaround visibility</p>
       <form id="login-form" autocomplete="on">
         <label>Username<input id="login-username" autocomplete="username" required /></label>
@@ -29,7 +30,7 @@
 
   <div id="app" class="app-shell hidden">
     <header class="topbar">
-      <div class="brand-row"><div class="brand-mark small">Rx</div><div><strong>Prescription Tracker</strong><span id="site-label" class="muted tiny"></span></div></div>
+      <div class="brand-row"><div class="brand-mark small">RxT</div><div><strong>Prescription Tracker</strong><span class="brand-by-small">by ED&amp;G&trade;</span><span id="site-label" class="muted tiny"></span></div></div>
       <div class="topbar-right"><span id="current-user"></span><span id="current-role" class="role-pill"></span><button id="logout-btn" class="btn ghost">Sign out</button></div>
     </header>
 
@@ -44,6 +45,8 @@
         <div class="summary-card"><span>Ready</span><strong id="sum-ready">0</strong></div>
         <div class="summary-card"><span>Over target</span><strong id="sum-red">0</strong></div>
       </div>
+      <h3 style="margin-top:16px">By type</h3>
+      <div id="tiles-by-type" class="tiles-by-type"></div>
     </aside>
 
     <nav class="tabs" aria-label="Primary">
@@ -64,23 +67,15 @@
       <section id="view-new" class="view">
         <div class="page-head"><div><h2>Book in prescription</h2><p class="muted">Create a new tracked prescription</p></div></div>
         <form id="book-form" class="panel form-grid">
-          <label>Ward <small class="muted">(required — selects the hospital automatically)</small><select id="book-ward" required><option value="" disabled selected>Select a ward…</option></select></label>
-          <label>Hospital <small class="muted">(don't know the ward? pick the hospital first, then choose from the ward list)</small><select id="book-site"><option value="">All hospitals</option></select></label>
+          <label>Hospital / unit<select id="book-site" required><option value="" disabled selected>Select hospital/unit…</option></select></label>
+          <label>Ward<select id="book-ward"><option value="">No ward — book directly to the hospital/unit</option></select></label>
           <label class="span-2">Dispensary<select id="book-dispensary" required></select></label>
           <label>Hospital number<input id="book-hn" maxlength="64" required /></label>
           <label>Patient initials<input id="book-initials" maxlength="12" placeholder="Optional" /></label>
-          <label>Prescription type
-            <select id="book-type">
-              <option value="prescreened" selected>Prescreened</option>
-              <option value="inpatient">Inpatient</option>
-              <option value="tto">TTO</option>
-              <option value="outpatient">Outpatient</option>
-              <option value="other">Other</option>
-            </select>
-          </label>
+          <label>Prescription type<select id="book-type" required></select></label>
           <label>Number of items<input id="book-items" type="number" min="0" max="200" /></label>
           <label class="check-label"><input id="book-cd" type="checkbox" /> Contains controlled drug</label>
-          <label class="span-2">Needed by <small class="muted">(optional — leave blank and it's judged against the standard turnaround for this prescription type)</small>
+          <label class="span-2">Needed by
             <input id="book-needed-by" type="datetime-local" />
           </label>
           <label class="span-2">Notes<textarea id="book-notes" rows="3" maxlength="1000" placeholder="Avoid clinical information unless operationally necessary"></textarea></label>
@@ -114,12 +109,20 @@
       </section>
 
       <section id="view-settings" class="view">
-        <div class="page-head"><div><h2>Configuration</h2><p class="muted">Sites, dispensaries and wards</p></div></div>
+        <div class="page-head"><div><h2>Configuration</h2><p class="muted">Dispensaries, sites, wards, prescription types and suspension reasons</p></div></div>
+
         <div class="settings-grid">
-          <form id="site-form" class="panel"><h3>Add hospital site</h3><label>Name<input id="site-name" required /></label><button class="btn secondary" type="submit">Add site</button></form>
-          <form id="disp-form" class="panel"><h3>Add dispensary</h3><label>Site<select id="disp-site" required></select></label><label>Name<input id="disp-name" required /></label><button class="btn secondary" type="submit">Add dispensary</button></form>
-          <form id="ward-form" class="panel"><h3>Add ward/location</h3><label>Site<select id="ward-site" required></select></label><label>Name<input id="ward-name" required /></label><button class="btn secondary" type="submit">Add ward</button></form>
+          <form id="disp-form" class="panel"><h3>1. Add dispensary</h3><p class="perm-note">Start here — a dispensary can serve more than one hospital, so it isn't tied to a site at creation. Link it to hospitals below once both exist.</p><label>Name<input id="disp-name" required /></label><button class="btn secondary" type="submit">Add dispensary</button></form>
+          <form id="site-form" class="panel"><h3>2. Add hospital site</h3><label>Name<input id="site-name" required /></label><button class="btn secondary" type="submit">Add site</button></form>
+          <form id="ward-form" class="panel"><h3>3. Add ward/location</h3><label>Site<select id="ward-site" required></select></label><label>Name<input id="ward-name" required /></label><button class="btn secondary" type="submit">Add ward</button></form>
         </div>
+
+        <div class="panel" style="margin-top:16px">
+          <h3>Dispensary ↔ hospital coverage</h3>
+          <p class="muted tiny">Tick every hospital a dispensary serves — saved immediately per tick. Coverage is by hospital, not by individual ward: ticking a hospital serves every ward under it automatically, including ones added later.</p>
+          <div class="table-card" id="disp-sites-wrap"><table id="disp-sites-table"><thead><tr><th>Dispensary</th></tr></thead><tbody id="disp-sites-body"></tbody></table></div>
+        </div>
+
         <div class="panel" style="margin-top:16px">
           <h3>Import sites &amp; wards from Excel</h3>
           <p class="muted tiny">Two columns: <strong>Site</strong> (hospital name) and <strong>Ward</strong>. One row per ward. A site with no wards can appear once with the ward column blank. Existing sites/wards with matching names are left alone.</p>
@@ -134,10 +137,25 @@
             <span id="import-summary" class="muted tiny"></span>
           </div>
         </div>
+
         <div class="panel" style="margin-top:16px">
-          <h3>Turnaround targets (KPI)</h3>
-          <p class="muted tiny">How long after booking-in a prescription turns amber, then red, on the live queue — set per prescription type, in hours and minutes. Leave a type blank to fall back to the general default.</p>
-          <div class="table-card"><table><thead><tr><th>Type</th><th>Turns amber after</th><th>Turns red after</th><th></th></tr></thead><tbody id="kpi-body"></tbody></table></div>
+          <h3>Prescription types</h3>
+          <p class="muted tiny">Not a fixed list — create, retarget or retire types here. "Pre-screened" types skip straight to Awaiting Labelling and Assembly when booked in; anything else enters at Awaiting Screening first. Each type carries its own turnaround target (one KPI per type, in hours and minutes) rather than a per-line rule.</p>
+          <form id="ptype-form" class="form-grid" style="margin-bottom:14px">
+            <label>Name<input id="ptype-name" required /></label>
+            <label class="check-label"><input id="ptype-prescreened" type="checkbox" /> Pre-screened (skips Awaiting Screening)</label>
+            <label>Turns amber after<span class="filters"><input type="number" min="0" id="ptype-amber-h" placeholder="h" style="width:56px">h <input type="number" min="0" max="59" id="ptype-amber-m" placeholder="m" style="width:56px">m</span></label>
+            <label>Turns red after<span class="filters"><input type="number" min="0" id="ptype-red-h" placeholder="h" style="width:56px">h <input type="number" min="0" max="59" id="ptype-red-m" placeholder="m" style="width:56px">m</span></label>
+            <div class="span-2"><button class="btn primary" type="submit">Add prescription type</button></div>
+          </form>
+          <div class="table-card"><table><thead><tr><th>Type</th><th>Pre-screened?</th><th>Turns amber after</th><th>Turns red after</th><th>Default</th><th></th></tr></thead><tbody id="ptype-body"></tbody></table></div>
+        </div>
+
+        <div class="panel" style="margin-top:16px">
+          <h3>Suspension reasons</h3>
+          <p class="muted tiny">Fully editable — the dropdown always lists these alphabetically. Only "Other" is fixed in the app itself (it's what triggers the free-text box); it can't be removed.</p>
+          <form id="reason-form" class="filters" style="margin-bottom:12px"><input id="reason-name" placeholder="New reason" required /><button class="btn secondary" type="submit">Add reason</button></form>
+          <div class="table-card"><table><thead><tr><th>Reason</th><th></th></tr></thead><tbody id="reason-body"></tbody></table></div>
         </div>
       </section>
 
