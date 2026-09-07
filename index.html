@@ -35,6 +35,17 @@
 
     <div id="rp-strip" class="rp-strip"></div>
 
+    <div id="tiles-trigger" class="tiles-trigger" aria-hidden="true"></div>
+    <aside id="tiles-flyout" class="tiles-flyout" aria-label="Queue summary">
+      <h3>Live queue summary</h3>
+      <div class="summary-grid summary-grid-vertical">
+        <div class="summary-card"><span>Active</span><strong id="sum-active">0</strong></div>
+        <div class="summary-card"><span>Suspended</span><strong id="sum-suspended">0</strong></div>
+        <div class="summary-card"><span>Ready</span><strong id="sum-ready">0</strong></div>
+        <div class="summary-card"><span>Over target</span><strong id="sum-red">0</strong></div>
+      </div>
+    </aside>
+
     <nav class="tabs" aria-label="Primary">
       <button class="tab active" data-view="dashboard">Live queue</button>
       <button class="tab" data-view="new">Book in</button>
@@ -46,36 +57,31 @@
 
     <main>
       <section id="view-dashboard" class="view active-view">
-        <div class="page-head"><div><h2>Live queue</h2><p class="muted">Current dispensary workload</p></div><div class="filters"><select id="dispensary-filter"></select><button id="refresh-btn" class="btn secondary">Refresh</button></div></div>
-        <div class="summary-grid">
-          <div class="summary-card"><span>Active</span><strong id="sum-active">0</strong></div>
-          <div class="summary-card"><span>Suspended</span><strong id="sum-suspended">0</strong></div>
-          <div class="summary-card"><span>Ready</span><strong id="sum-ready">0</strong></div>
-          <div class="summary-card"><span>Over target</span><strong id="sum-red">0</strong></div>
-        </div>
-        <div class="table-card dense"><table class="dense"><thead><tr><th>ID</th><th>Hospital no.</th><th>Ward</th><th>Type</th><th>Items</th><th>Stage</th><th>Elapsed</th><th>KPI</th><th></th></tr></thead><tbody id="queue-body"></tbody></table></div>
+        <div class="page-head"><div><h2>Live queue</h2><p class="muted">Current dispensary workload — move your mouse to the left edge for the summary</p></div><div class="filters"><select id="dispensary-filter"></select><button id="refresh-btn" class="btn secondary">Refresh</button></div></div>
+        <div class="table-card dense"><table class="dense"><thead><tr><th>ID</th><th>Hospital no.</th><th>Ward</th><th>Type</th><th>Items</th><th>Stage</th><th>Elapsed</th></tr></thead><tbody id="queue-body"></tbody></table></div>
       </section>
 
       <section id="view-new" class="view">
         <div class="page-head"><div><h2>Book in prescription</h2><p class="muted">Create a new tracked prescription</p></div></div>
         <form id="book-form" class="panel form-grid">
-          <label>Hospital (site)<select id="book-site"></select></label>
-          <label>Ward<select id="book-ward"><option value="">Not specified</option></select></label>
+          <label>Ward <small class="muted">(required — selects the hospital automatically)</small><select id="book-ward" required><option value="" disabled selected>Select a ward…</option></select></label>
+          <label>Hospital <small class="muted">(don't know the ward? pick the hospital first, then choose from the ward list)</small><select id="book-site"><option value="">All hospitals</option></select></label>
           <label class="span-2">Dispensary<select id="book-dispensary" required></select></label>
           <label>Hospital number<input id="book-hn" maxlength="64" required /></label>
           <label>Patient initials<input id="book-initials" maxlength="12" placeholder="Optional" /></label>
-          <label>Prescription type<select id="book-type"><option value="inpatient">Inpatient</option><option value="tto">TTO</option><option value="outpatient">Outpatient</option><option value="other">Other</option></select></label>
-          <label>Priority<select id="book-priority"><option value="routine">Routine</option><option value="urgent">Urgent</option><option value="immediate">Immediate</option></select></label>
+          <label>Prescription type
+            <select id="book-type">
+              <option value="prescreened" selected>Prescreened</option>
+              <option value="inpatient">Inpatient</option>
+              <option value="tto">TTO</option>
+              <option value="outpatient">Outpatient</option>
+              <option value="other">Other</option>
+            </select>
+          </label>
           <label>Number of items<input id="book-items" type="number" min="0" max="200" /></label>
           <label class="check-label"><input id="book-cd" type="checkbox" /> Contains controlled drug</label>
-          <label class="span-2">Needed by <small class="muted">(optional — overrides nothing, just flags when it's actually needed)</small>
+          <label class="span-2">Needed by <small class="muted">(optional — leave blank and it's judged against the standard turnaround for this prescription type)</small>
             <input id="book-needed-by" type="datetime-local" />
-            <span class="filters" style="margin-top:6px">
-              <button type="button" class="btn ghost" data-needed-preset="today">Today, end of day</button>
-              <button type="button" class="btn ghost" data-needed-preset="tomorrow">Tomorrow</button>
-              <button type="button" class="btn ghost" data-needed-preset="2days">In 2 days</button>
-              <button type="button" class="btn ghost" data-needed-preset="clear">Clear</button>
-            </span>
           </label>
           <label class="span-2">Notes<textarea id="book-notes" rows="3" maxlength="1000" placeholder="Avoid clinical information unless operationally necessary"></textarea></label>
           <div class="span-2"><button class="btn primary" type="submit">Book in prescription</button></div>
@@ -85,7 +91,7 @@
       <section id="view-history" class="view">
         <div class="page-head"><div><h2>History</h2><p class="muted">Search tracked prescriptions</p></div></div>
         <div class="panel search-row"><input id="history-search" placeholder="Hospital number or tracking ID" /><select id="history-state"><option value="">All states</option><option>active</option><option>suspended</option><option>ready</option><option>collected</option><option>cancelled</option></select><button id="history-btn" class="btn secondary">Search</button></div>
-        <div class="table-card"><table><thead><tr><th>ID</th><th>Hospital no.</th><th>Ward</th><th>State</th><th>Stage</th><th>Received</th><th></th></tr></thead><tbody id="history-body"></tbody></table></div>
+        <div class="table-card"><table><thead><tr><th>ID</th><th>Hospital no.</th><th>Ward</th><th>State</th><th>Stage</th><th>Received</th></tr></thead><tbody id="history-body"></tbody></table></div>
       </section>
 
       <section id="view-users" class="view">
@@ -127,6 +133,11 @@
             <button id="import-commit-btn" class="btn primary" type="button">Import rows</button>
             <span id="import-summary" class="muted tiny"></span>
           </div>
+        </div>
+        <div class="panel" style="margin-top:16px">
+          <h3>Turnaround targets (KPI)</h3>
+          <p class="muted tiny">How long after booking-in a prescription turns amber, then red, on the live queue — set per prescription type, in hours and minutes. Leave a type blank to fall back to the general default.</p>
+          <div class="table-card"><table><thead><tr><th>Type</th><th>Turns amber after</th><th>Turns red after</th><th></th></tr></thead><tbody id="kpi-body"></tbody></table></div>
         </div>
       </section>
 
