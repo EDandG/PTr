@@ -32,8 +32,10 @@ button{cursor:pointer}
 .login-shell:after{content:"";position:absolute;right:-160px;bottom:-110px;width:620px;height:520px;background:linear-gradient(135deg,rgba(17,184,216,.55),rgba(112,198,59,.24));clip-path:polygon(40% 0,100% 0,100% 100%,0 100%);opacity:.38}
 .login-card{width:min(470px,100%);background:rgba(255,255,255,.97);border:1px solid rgba(8,54,111,.10);border-radius:4px;padding:38px 40px 34px;box-shadow:0 24px 70px rgba(3,43,88,.18);position:relative;z-index:2}
 .login-card:before{content:"";position:absolute;top:0;left:0;width:100%;height:7px;background:linear-gradient(90deg,var(--navy) 0 37%,var(--cyan) 37% 68%,var(--lime) 68% 100%)}
-.brand-mark{width:58px;height:58px;border-radius:3px;background:linear-gradient(145deg,var(--navy),var(--blue));color:white;display:grid;place-items:center;font-weight:900;font-size:21px;box-shadow:inset -8px -8px 18px rgba(0,0,0,.08)}
-.brand-mark.small{width:40px;height:40px;border-radius:2px;font-size:15px}
+.brand-mark{width:58px;height:58px;border-radius:3px;background:linear-gradient(145deg,var(--navy),var(--blue));color:white;display:grid;place-items:center;font-weight:900;font-size:18px;letter-spacing:-.02em;box-shadow:inset -8px -8px 18px rgba(0,0,0,.08)}
+.brand-mark.small{width:40px;height:40px;border-radius:2px;font-size:13px;letter-spacing:-.02em}
+.brand-by{margin:2px 0 10px;font-size:12px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.05em}
+.brand-by-small{font-size:10px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.05em;margin-left:6px}
 .login-card h1{font-size:32px;letter-spacing:-.03em;margin:22px 0 5px;color:var(--navy-deep)}
 .login-card h1:after{content:"";display:block;width:118px;height:4px;margin-top:13px;background:linear-gradient(90deg,var(--navy) 0 40%,var(--cyan) 40% 72%,var(--lime) 72%)}
 .login-card label,.panel label{display:grid;gap:7px;margin:15px 0;font-weight:700;font-size:13px;color:#24486f;letter-spacing:.01em}
@@ -116,9 +118,10 @@ h3{color:var(--navy-deep)}
 /* ---------- v1.4: dense PTS5/TMS-style worklist board ---------- */
 :root{--rp-set:#0c5cab;--rp-unset:#bf3b32;}
 table.dense th,table.dense td{padding:8px 10px;font-size:13px}
-table.dense{min-width:960px}
+/* No forced min-width - let the table shrink and wrap rather than force a
+   horizontal scrollbar; below a breakpoint it reflows into cards instead. */
 .table-card.dense tbody tr td:first-child{font-variant-numeric:tabular-nums;font-weight:800;color:var(--navy-deep)}
-tbody tr.row-clickable{cursor:pointer}
+tbody tr.row-clickable{cursor:pointer;transition:background 1s linear}
 tbody tr.row-clickable:hover{box-shadow:inset 0 0 0 999px rgba(5,51,103,.05)}
 tr.group-heading{background:linear-gradient(180deg,#eef6fb,#e7f2f9)!important}
 tr.group-heading td{padding:9px 14px;font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:.07em;color:var(--navy-deep);border-bottom:1px solid #cfe2ee;cursor:default}
@@ -180,7 +183,39 @@ main{padding-top:24px}
 .tiles-trigger:hover ~ .tiles-flyout, .tiles-flyout:hover, .tiles-flyout.open{transform:translateX(0)}
 .tiles-flyout h3{margin:0 0 12px;font-size:13px;text-transform:uppercase;letter-spacing:.06em;color:var(--muted)}
 .summary-grid-vertical{display:flex;flex-direction:column;gap:12px}
+.tiles-by-type{display:flex;flex-direction:column;gap:4px}
+.tiles-by-type-row{display:flex;align-items:center;justify-content:space-between;gap:8px;width:100%;padding:7px 10px;border:1px solid var(--line);border-radius:3px;background:#fff;cursor:pointer;font:inherit;font-weight:700;font-size:13px;color:var(--navy-deep);text-align:left}
+.tiles-by-type-row:hover{background:var(--cyan-soft);border-color:var(--cyan)}
+.tiles-by-type-row strong{color:var(--navy)}
 @media(max-width:800px){
   .tiles-trigger{width:10px}
   .tiles-flyout{width:80vw;max-width:280px}
 }
+
+/* Below this width, tables reflow into stacked cards rather than force a
+   horizontal scrollbar - each row becomes a card, each labelled cell a line. */
+@media(max-width:760px){
+  .table-card table{width:100%}
+  .table-card thead{display:none}
+  .table-card tbody tr{display:block;margin-bottom:10px;border:1px solid var(--line);border-radius:4px;padding:8px 10px;background:#fff}
+  .table-card tbody tr.group-heading{padding:9px 12px;margin-bottom:6px}
+  .table-card td[data-label]{display:flex;justify-content:space-between;align-items:flex-start;gap:10px;padding:5px 0;border:0;font-size:13px;text-align:right}
+  .table-card td[data-label]::before{content:attr(data-label);font-weight:700;color:var(--muted);font-size:11px;text-transform:uppercase;letter-spacing:.03em;flex:none;text-align:left}
+  .table-card td[colspan]{display:block;text-align:left}
+}
+
+/* Searchable dropdowns (ward/site/dispensary/type/suspension reason) */
+.searchable{position:relative;display:inline-block;width:100%}
+select.searchable-native{display:none}
+.searchable-input{width:100%}
+.searchable-panel{position:absolute;top:100%;left:0;right:0;z-index:40;background:#fff;border:1px solid var(--line);border-top:0;border-radius:0 0 3px 3px;box-shadow:0 8px 20px rgba(5,51,103,.14);max-height:220px;overflow-y:auto}
+.searchable-panel.hidden{display:none}
+.searchable-option{padding:8px 10px;font-size:13px;cursor:pointer}
+.searchable-option:hover,.searchable-option.active{background:var(--cyan-soft)}
+.searchable-empty{padding:8px 10px;font-size:13px;color:var(--muted);font-style:italic}
+
+/* Dispensary <-> site coverage matrix */
+#disp-sites-wrap{overflow-x:auto}
+#disp-sites-table{min-width:0}
+#disp-sites-table th,#disp-sites-table td{text-align:center;white-space:nowrap}
+#disp-sites-table th:first-child,#disp-sites-table td:first-child{text-align:left}
