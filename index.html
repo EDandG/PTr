@@ -1,0 +1,121 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="robots" content="noindex,nofollow" />
+  <title>Prescription Tracker</title>
+  <link rel="stylesheet" href="css/app.css" />
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+  <script src="config.js"></script>
+</head>
+<body>
+  <div id="toast" class="toast hidden" role="status"></div>
+
+  <section id="login-screen" class="login-shell">
+    <div class="login-card">
+      <div class="brand-mark">Rx</div>
+      <h1>Prescription Tracker</h1>
+      <p class="muted">Dispensary workflow, audit and turnaround visibility</p>
+      <form id="login-form" autocomplete="on">
+        <label>Username<input id="login-username" autocomplete="username" required /></label>
+        <label>Password<input id="login-password" type="password" autocomplete="current-password" required /></label>
+        <button class="btn primary full" type="submit">Sign in</button>
+      </form>
+      <p id="login-error" class="error-text"></p>
+    </div>
+  </section>
+
+  <div id="app" class="app-shell hidden">
+    <header class="topbar">
+      <div class="brand-row"><div class="brand-mark small">Rx</div><div><strong>Prescription Tracker</strong><span id="site-label" class="muted tiny"></span></div></div>
+      <div class="topbar-right"><span id="current-user"></span><span id="current-role" class="role-pill"></span><button id="logout-btn" class="btn ghost">Sign out</button></div>
+    </header>
+
+    <nav class="tabs" aria-label="Primary">
+      <button class="tab active" data-view="dashboard">Live queue</button>
+      <button class="tab" data-view="new">Book in</button>
+      <button class="tab" data-view="history">History</button>
+      <button class="tab admin-only hidden" data-view="users">Users</button>
+      <button class="tab admin-config hidden" data-view="settings">Configuration</button>
+      <button class="tab governance-only hidden" data-view="audit">Audit</button>
+    </nav>
+
+    <main>
+      <section id="view-dashboard" class="view active-view">
+        <div class="page-head"><div><h2>Live queue</h2><p class="muted">Current dispensary workload</p></div><div class="filters"><select id="dispensary-filter"></select><button id="refresh-btn" class="btn secondary">Refresh</button></div></div>
+        <div class="summary-grid">
+          <div class="summary-card"><span>Active</span><strong id="sum-active">0</strong></div>
+          <div class="summary-card"><span>Suspended</span><strong id="sum-suspended">0</strong></div>
+          <div class="summary-card"><span>Ready</span><strong id="sum-ready">0</strong></div>
+          <div class="summary-card"><span>Over target</span><strong id="sum-red">0</strong></div>
+        </div>
+        <div class="table-card"><table><thead><tr><th>ID</th><th>Hospital no.</th><th>Ward</th><th>Type</th><th>Items</th><th>Stage</th><th>Elapsed</th><th>KPI</th><th></th></tr></thead><tbody id="queue-body"></tbody></table></div>
+      </section>
+
+      <section id="view-new" class="view">
+        <div class="page-head"><div><h2>Book in prescription</h2><p class="muted">Create a new tracked prescription</p></div></div>
+        <form id="book-form" class="panel form-grid">
+          <label>Dispensary<select id="book-dispensary" required></select></label>
+          <label>Hospital number<input id="book-hn" maxlength="64" required /></label>
+          <label>Patient initials<input id="book-initials" maxlength="12" placeholder="Optional" /></label>
+          <label>Ward<select id="book-ward"><option value="">Not specified</option></select></label>
+          <label>Prescription type<select id="book-type"><option value="inpatient">Inpatient</option><option value="tto">TTO</option><option value="outpatient">Outpatient</option><option value="other">Other</option></select></label>
+          <label>Priority<select id="book-priority"><option value="routine">Routine</option><option value="urgent">Urgent</option><option value="immediate">Immediate</option></select></label>
+          <label>Number of items<input id="book-items" type="number" min="0" max="200" /></label>
+          <label class="check-label"><input id="book-cd" type="checkbox" /> Contains controlled drug</label>
+          <label class="span-2">Notes<textarea id="book-notes" rows="3" maxlength="1000" placeholder="Avoid clinical information unless operationally necessary"></textarea></label>
+          <div class="span-2"><button class="btn primary" type="submit">Book in prescription</button></div>
+        </form>
+      </section>
+
+      <section id="view-history" class="view">
+        <div class="page-head"><div><h2>History</h2><p class="muted">Search tracked prescriptions</p></div></div>
+        <div class="panel search-row"><input id="history-search" placeholder="Hospital number or tracking ID" /><select id="history-state"><option value="">All states</option><option>active</option><option>suspended</option><option>ready</option><option>collected</option><option>cancelled</option></select><button id="history-btn" class="btn secondary">Search</button></div>
+        <div class="table-card"><table><thead><tr><th>ID</th><th>Hospital no.</th><th>Ward</th><th>State</th><th>Stage</th><th>Received</th><th></th></tr></thead><tbody id="history-body"></tbody></table></div>
+      </section>
+
+      <section id="view-users" class="view">
+        <div class="page-head"><div><h2>User management</h2><p class="muted">Superuser-controlled accounts and dispensary access</p></div></div>
+        <form id="create-user-form" class="panel form-grid">
+          <label>Username<input id="user-username" minlength="3" required /></label>
+          <label>Display name<input id="user-display" required /></label>
+          <label>Role<select id="user-role"><option value="admin">Admin</option><option value="pharmacist">Pharmacist</option><option value="technician">Technician</option><option value="assistant">Assistant</option><option value="governance">Governance</option></select></label>
+          <label>Initial password<input id="user-password" type="password" minlength="12" required /></label>
+          <fieldset class="span-2"><legend>Dispensary access</legend><div id="user-dispensaries" class="checkbox-grid"></div></fieldset>
+          <div class="span-2"><button class="btn primary" type="submit">Create user</button></div>
+        </form>
+        <div class="table-card"><table><thead><tr><th>Username</th><th>Name</th><th>Role</th><th>Active</th><th></th></tr></thead><tbody id="users-body"></tbody></table></div>
+      </section>
+
+      <section id="view-settings" class="view">
+        <div class="page-head"><div><h2>Configuration</h2><p class="muted">Sites, dispensaries and wards</p></div></div>
+        <div class="settings-grid">
+          <form id="site-form" class="panel"><h3>Add site</h3><label>Name<input id="site-name" required /></label><button class="btn secondary" type="submit">Add site</button></form>
+          <form id="disp-form" class="panel"><h3>Add dispensary</h3><label>Site<select id="disp-site" required></select></label><label>Name<input id="disp-name" required /></label><button class="btn secondary" type="submit">Add dispensary</button></form>
+          <form id="ward-form" class="panel"><h3>Add ward/location</h3><label>Site<select id="ward-site" required></select></label><label>Name<input id="ward-name" required /></label><button class="btn secondary" type="submit">Add ward</button></form>
+        </div>
+      </section>
+
+      <section id="view-audit" class="view">
+        <div class="page-head"><div><h2>Audit log</h2><p class="muted">Administrative and governance activity</p></div></div>
+        <div class="table-card"><table><thead><tr><th>Time</th><th>Action</th><th>Entity</th><th>User</th><th>Details</th></tr></thead><tbody id="audit-body"></tbody></table></div>
+      </section>
+    </main>
+  </div>
+
+  <dialog id="rx-dialog">
+    <div class="dialog-head"><div><h2 id="rx-title">Prescription</h2><p id="rx-subtitle" class="muted"></p></div><button id="rx-close" class="icon-btn" aria-label="Close">×</button></div>
+    <div id="rx-summary" class="detail-grid"></div>
+    <div id="rx-actions" class="action-row"></div>
+    <div id="correction-panel" class="panel compact admin-correction hidden">
+      <h3>Correct hospital number</h3>
+      <div class="search-row"><input id="correct-hn" placeholder="New hospital number" /><input id="correct-reason" placeholder="Reason for correction" /><button id="correct-btn" class="btn secondary">Correct</button></div>
+    </div>
+    <div id="suspend-panel" class="panel compact hidden"><h3>Suspend prescription</h3><div class="search-row"><select id="suspend-reason"></select><input id="suspend-note" placeholder="Optional note" /><button id="suspend-btn" class="btn danger">Suspend</button></div></div>
+    <h3>Timeline</h3><div id="timeline" class="timeline"></div>
+  </dialog>
+
+  <script src="js/app.js"></script>
+</body>
+</html>
