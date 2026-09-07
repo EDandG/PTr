@@ -7,6 +7,7 @@
   <title>Prescription Tracker</title>
   <link rel="stylesheet" href="css/app.css" />
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+  <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
   <script src="config.js"></script>
 </head>
 <body>
@@ -32,13 +33,15 @@
       <div class="topbar-right"><span id="current-user"></span><span id="current-role" class="role-pill"></span><button id="logout-btn" class="btn ghost">Sign out</button></div>
     </header>
 
+    <div id="rp-strip" class="rp-strip"></div>
+
     <nav class="tabs" aria-label="Primary">
       <button class="tab active" data-view="dashboard">Live queue</button>
       <button class="tab" data-view="new">Book in</button>
       <button class="tab" data-view="history">History</button>
-      <button class="tab admin-only hidden" data-view="users">Users</button>
-      <button class="tab admin-config hidden" data-view="settings">Configuration</button>
-      <button class="tab governance-only hidden" data-view="audit">Audit</button>
+      <button class="tab perm-users hidden" data-view="users">Users</button>
+      <button class="tab perm-config hidden" data-view="settings">Configuration</button>
+      <button class="tab perm-audit hidden" data-view="audit">Audit</button>
     </nav>
 
     <main>
@@ -50,20 +53,30 @@
           <div class="summary-card"><span>Ready</span><strong id="sum-ready">0</strong></div>
           <div class="summary-card"><span>Over target</span><strong id="sum-red">0</strong></div>
         </div>
-        <div class="table-card"><table><thead><tr><th>ID</th><th>Hospital no.</th><th>Ward</th><th>Type</th><th>Items</th><th>Stage</th><th>Elapsed</th><th>KPI</th><th></th></tr></thead><tbody id="queue-body"></tbody></table></div>
+        <div class="table-card dense"><table class="dense"><thead><tr><th>ID</th><th>Hospital no.</th><th>Ward</th><th>Type</th><th>Items</th><th>Stage</th><th>Elapsed</th><th>KPI</th><th></th></tr></thead><tbody id="queue-body"></tbody></table></div>
       </section>
 
       <section id="view-new" class="view">
         <div class="page-head"><div><h2>Book in prescription</h2><p class="muted">Create a new tracked prescription</p></div></div>
         <form id="book-form" class="panel form-grid">
-          <label>Dispensary<select id="book-dispensary" required></select></label>
+          <label>Hospital (site)<select id="book-site"></select></label>
+          <label>Ward<select id="book-ward"><option value="">Not specified</option></select></label>
+          <label class="span-2">Dispensary<select id="book-dispensary" required></select></label>
           <label>Hospital number<input id="book-hn" maxlength="64" required /></label>
           <label>Patient initials<input id="book-initials" maxlength="12" placeholder="Optional" /></label>
-          <label>Ward<select id="book-ward"><option value="">Not specified</option></select></label>
           <label>Prescription type<select id="book-type"><option value="inpatient">Inpatient</option><option value="tto">TTO</option><option value="outpatient">Outpatient</option><option value="other">Other</option></select></label>
           <label>Priority<select id="book-priority"><option value="routine">Routine</option><option value="urgent">Urgent</option><option value="immediate">Immediate</option></select></label>
           <label>Number of items<input id="book-items" type="number" min="0" max="200" /></label>
           <label class="check-label"><input id="book-cd" type="checkbox" /> Contains controlled drug</label>
+          <label class="span-2">Needed by <small class="muted">(optional — overrides nothing, just flags when it's actually needed)</small>
+            <input id="book-needed-by" type="datetime-local" />
+            <span class="filters" style="margin-top:6px">
+              <button type="button" class="btn ghost" data-needed-preset="today">Today, end of day</button>
+              <button type="button" class="btn ghost" data-needed-preset="tomorrow">Tomorrow</button>
+              <button type="button" class="btn ghost" data-needed-preset="2days">In 2 days</button>
+              <button type="button" class="btn ghost" data-needed-preset="clear">Clear</button>
+            </span>
+          </label>
           <label class="span-2">Notes<textarea id="book-notes" rows="3" maxlength="1000" placeholder="Avoid clinical information unless operationally necessary"></textarea></label>
           <div class="span-2"><button class="btn primary" type="submit">Book in prescription</button></div>
         </form>
@@ -76,30 +89,51 @@
       </section>
 
       <section id="view-users" class="view">
-        <div class="page-head"><div><h2>User management</h2><p class="muted">Superuser-controlled accounts and dispensary access</p></div></div>
+        <div class="page-head"><div><h2>Users control panel</h2><p class="muted">Accounts, dispensary access and tickbox permissions — everything starts switched off</p></div></div>
         <form id="create-user-form" class="panel form-grid">
           <label>Username<input id="user-username" minlength="3" required /></label>
           <label>Display name<input id="user-display" required /></label>
-          <label>Role<select id="user-role"><option value="admin">Admin</option><option value="pharmacist">Pharmacist</option><option value="technician">Technician</option><option value="assistant">Assistant</option><option value="governance">Governance</option></select></label>
+          <label>Role<select id="user-role"><option value="assistant">Pharmacy Assistant</option><option value="technician">Pharmacy Technician</option><option value="pharmacist">Pharmacist</option><option value="admin">Admin</option><option value="governance">Governance</option></select></label>
           <label>Initial password<input id="user-password" type="password" minlength="12" required /></label>
+          <label>GPhC number <small class="muted" id="user-gphc-hint">(required for Pharmacist accounts)</small><input id="user-gphc" pattern="[0-9]{6,8}" maxlength="8" placeholder="e.g. 2069123" /></label>
           <fieldset class="span-2"><legend>Dispensary access</legend><div id="user-dispensaries" class="checkbox-grid"></div></fieldset>
+          <fieldset class="span-2"><legend>Permissions — all off by default</legend>
+            <p class="perm-note">Tick only what this person needs. Nothing here is inferred from the role above, except where noted.</p>
+            <div class="perm-grid" id="user-perms-clinical"></div>
+            <p class="perm-role-note" id="user-role-note"></p>
+          </fieldset>
           <div class="span-2"><button class="btn primary" type="submit">Create user</button></div>
         </form>
-        <div class="table-card"><table><thead><tr><th>Username</th><th>Name</th><th>Role</th><th>Active</th><th></th></tr></thead><tbody id="users-body"></tbody></table></div>
+        <div class="table-card"><table><thead><tr><th>Username</th><th>Name</th><th>Role</th><th>GPhC no.</th><th>Active</th><th>Permissions</th><th></th></tr></thead><tbody id="users-body"></tbody></table></div>
       </section>
 
       <section id="view-settings" class="view">
         <div class="page-head"><div><h2>Configuration</h2><p class="muted">Sites, dispensaries and wards</p></div></div>
         <div class="settings-grid">
-          <form id="site-form" class="panel"><h3>Add site</h3><label>Name<input id="site-name" required /></label><button class="btn secondary" type="submit">Add site</button></form>
+          <form id="site-form" class="panel"><h3>Add hospital site</h3><label>Name<input id="site-name" required /></label><button class="btn secondary" type="submit">Add site</button></form>
           <form id="disp-form" class="panel"><h3>Add dispensary</h3><label>Site<select id="disp-site" required></select></label><label>Name<input id="disp-name" required /></label><button class="btn secondary" type="submit">Add dispensary</button></form>
           <form id="ward-form" class="panel"><h3>Add ward/location</h3><label>Site<select id="ward-site" required></select></label><label>Name<input id="ward-name" required /></label><button class="btn secondary" type="submit">Add ward</button></form>
+        </div>
+        <div class="panel" style="margin-top:16px">
+          <h3>Import sites &amp; wards from Excel</h3>
+          <p class="muted tiny">Two columns: <strong>Site</strong> (hospital name) and <strong>Ward</strong>. One row per ward. A site with no wards can appear once with the ward column blank. Existing sites/wards with matching names are left alone.</p>
+          <div class="filters" style="margin:10px 0">
+            <input id="import-file" type="file" accept=".xlsx,.xls,.csv" />
+            <button id="import-template-btn" class="btn ghost" type="button">Download template</button>
+          </div>
+          <div id="import-drop" class="import-drop">Drop a spreadsheet here, or use the file picker above</div>
+          <div id="import-preview" class="import-preview hidden"></div>
+          <div id="import-actions" class="filters hidden" style="margin-top:10px">
+            <button id="import-commit-btn" class="btn primary" type="button">Import rows</button>
+            <span id="import-summary" class="muted tiny"></span>
+          </div>
         </div>
       </section>
 
       <section id="view-audit" class="view">
-        <div class="page-head"><div><h2>Audit log</h2><p class="muted">Administrative and governance activity</p></div></div>
-        <div class="table-card"><table><thead><tr><th>Time</th><th>Action</th><th>Entity</th><th>User</th><th>Details</th></tr></thead><tbody id="audit-body"></tbody></table></div>
+        <div class="page-head"><div><h2>Audit log</h2><p class="muted">Administrative and clinical activity, by hospital number</p></div></div>
+        <div class="panel search-row"><input id="audit-search" placeholder="Filter by hospital number" /><button id="audit-search-btn" class="btn secondary">Filter</button><button id="audit-clear-btn" class="btn ghost">Clear</button></div>
+        <div class="table-card"><table><thead><tr><th>Time</th><th>Action</th><th>Hospital no.</th><th>Entity</th><th>User</th><th>Details</th></tr></thead><tbody id="audit-body"></tbody></table></div>
       </section>
     </main>
   </div>
@@ -112,8 +146,25 @@
       <h3>Correct hospital number</h3>
       <div class="search-row"><input id="correct-hn" placeholder="New hospital number" /><input id="correct-reason" placeholder="Reason for correction" /><button id="correct-btn" class="btn secondary">Correct</button></div>
     </div>
-    <div id="suspend-panel" class="panel compact hidden"><h3>Suspend prescription</h3><div class="search-row"><select id="suspend-reason"></select><input id="suspend-note" placeholder="Optional note" /><button id="suspend-btn" class="btn danger">Suspend</button></div></div>
+    <div id="suspend-panel" class="panel compact hidden"><h3>Suspend prescription</h3><div class="search-row"><select id="suspend-reason"></select><input id="suspend-note" placeholder="Note (required if 'Other')" /><button id="suspend-btn" class="btn danger">Suspend</button></div></div>
     <h3>Timeline</h3><div id="timeline" class="timeline"></div>
+  </dialog>
+
+  <dialog id="manage-user-dialog">
+    <div class="dialog-head"><div><h2>Manage user</h2><p id="manage-user-name" class="muted"></p></div><button id="manage-user-close" class="icon-btn" aria-label="Close">×</button></div>
+    <form id="manage-user-form" class="form-grid">
+      <label>Display name<input id="mu-display" required /></label>
+      <label>Role<select id="mu-role"><option value="assistant">Pharmacy Assistant</option><option value="technician">Pharmacy Technician</option><option value="pharmacist">Pharmacist</option><option value="admin">Admin</option><option value="governance">Governance</option></select></label>
+      <label class="check-label"><input id="mu-active" type="checkbox" /> Active</label>
+      <label>Reset password <small class="muted">(optional, 12+ characters)</small><input id="mu-password" type="password" minlength="12" /></label>
+      <label>GPhC number <small class="muted" id="mu-gphc-hint">(required for Pharmacist accounts)</small><input id="mu-gphc" pattern="[0-9]{6,8}" maxlength="8" placeholder="e.g. 2069123" /></label>
+      <fieldset class="span-2"><legend>Dispensary access</legend><div id="mu-dispensaries" class="checkbox-grid"></div></fieldset>
+      <fieldset class="span-2"><legend>Permissions</legend>
+        <div class="perm-grid" id="mu-perms-clinical"></div>
+        <p class="perm-role-note" id="mu-role-note"></p>
+      </fieldset>
+      <div class="span-2"><button class="btn primary" type="submit">Save changes</button></div>
+    </form>
   </dialog>
 
   <script src="js/app.js"></script>
