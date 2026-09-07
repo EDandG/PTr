@@ -112,3 +112,62 @@ h3{color:var(--navy-deep)}
 @media(max-width:800px){
   .summary-grid,.settings-grid,.form-grid,.detail-grid{grid-template-columns:1fr}.span-2{grid-column:auto}.page-head{align-items:stretch;flex-direction:column}.filters,.search-row{flex-wrap:wrap}.topbar{padding:0 12px}.tabs{padding:0 8px;top:76px}main{padding:16px}.topbar-right #current-user{display:none}.login-shell:before{left:-250px;opacity:.88}.login-card{padding:30px 24px}.summary-card{min-height:82px}main:before{display:none}
 }
+
+/* ---------- v1.4: dense PTS5/TMS-style worklist board ---------- */
+:root{--rp-set:#0c5cab;--rp-unset:#bf3b32;}
+table.dense th,table.dense td{padding:8px 10px;font-size:13px}
+table.dense{min-width:960px}
+.table-card.dense tbody tr td:first-child{font-variant-numeric:tabular-nums;font-weight:800;color:var(--navy-deep)}
+tr.row-red{border-left:4px solid var(--red)}
+tr.row-amber{border-left:4px solid var(--amber)}
+tr.row-green{border-left:4px solid var(--green)}
+tr.row-suspended{border-left:4px solid var(--susp);background:#faf8ff}
+tr.row-complete{border-left:4px solid var(--line)}
+
+/* RP status strip - visible to everyone, sits under the topbar */
+.rp-strip{background:var(--navy-deep);color:#eaf4ff;display:flex;flex-wrap:wrap;gap:0;align-items:center;padding:0 28px;font-size:12px;font-weight:700;letter-spacing:.02em;position:sticky;top:76px;z-index:6}
+.rp-strip .rp-chip{display:flex;align-items:center;gap:7px;padding:8px 16px 8px 0;margin-right:16px;border-right:1px solid rgba(255,255,255,.14)}
+.rp-strip .rp-chip:last-child{border-right:0}
+.rp-strip .rp-dot{width:8px;height:8px;border-radius:50%;flex:none}
+.rp-strip .rp-dot.set{background:#5fe08a;box-shadow:0 0 0 3px rgba(95,224,138,.22)}
+.rp-strip .rp-dot.unset{background:#ff8a80;box-shadow:0 0 0 3px rgba(255,138,128,.22)}
+.rp-strip .rp-site{opacity:.75;font-weight:800;text-transform:uppercase;font-size:10px;letter-spacing:.08em;margin-right:5px}
+.rp-strip .rp-name{color:#fff}
+.rp-strip .rp-none{opacity:.65;font-style:italic;font-weight:600}
+.rp-strip .rp-gphc{opacity:.7;font-weight:600;font-size:10px;letter-spacing:.03em;margin-left:4px}
+.rp-strip button{margin-left:auto;padding:6px 12px;font-size:11px}
+.tabs{top:76px}
+.rp-strip ~ .tabs{top:114px}
+main{padding-top:24px}
+
+/* Permission tickbox grid (Users control panel) */
+.perm-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:6px 18px;margin:6px 0 4px}
+.perm-grid.elevated{border-top:1px dashed #c8dae9;padding-top:10px;margin-top:10px}
+.perm-item{display:flex;align-items:flex-start;gap:8px;font-weight:600;font-size:13px;color:#24486f;padding:4px 0}
+.perm-item.perm-item-disabled{opacity:.4}
+.perm-item input{width:auto;margin-top:3px}
+.perm-item small{display:block;font-weight:500;color:var(--muted)}
+.perm-note{font-size:12px;color:var(--muted);margin:2px 0 10px}
+.perm-role-note{font-size:12px;color:var(--navy);background:#eef7fb;border:1px solid #d4e9ed;border-radius:3px;padding:8px 10px;margin-top:8px;min-height:0}
+.perm-role-note:empty{display:none}
+.detail.detail-overdue{border-color:var(--red);background:#fff3f2}
+.detail.detail-overdue strong{color:var(--red)}
+.perm-badges{display:flex;flex-wrap:wrap;gap:4px}
+.perm-badge{font-size:10px;font-weight:800;text-transform:uppercase;letter-spacing:.04em;padding:2px 6px;border-radius:2px;background:#e9f6fb;color:var(--navy);border:1px solid #c8eaf4}
+.perm-badge.super{background:var(--navy-deep);color:#fff;border-color:var(--navy-deep)}
+.perm-badge.off{opacity:.35}
+
+/* Excel import panel */
+.import-drop{border:2px dashed #b9d4e8;border-radius:4px;padding:22px;text-align:center;color:var(--muted);font-weight:700}
+.import-drop.drag{border-color:var(--cyan);background:var(--cyan-soft)}
+.import-preview{max-height:260px;overflow:auto;margin:12px 0;border:1px solid var(--line);border-radius:3px}
+.import-preview table{min-width:0}
+
+/* Manage-user dialog reuses .panel styling inside a dialog */
+#manage-user-dialog .form-grid{grid-template-columns:1fr}
+
+@media(max-width:800px){
+  .rp-strip{padding:8px 12px;top:auto;position:static}
+  .rp-strip button{margin-left:0;width:100%;margin-top:6px}
+  .perm-grid{grid-template-columns:1fr}
+}
