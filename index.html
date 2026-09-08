@@ -67,9 +67,9 @@
       <section id="view-new" class="view">
         <div class="page-head"><div><h2>Book in prescription</h2><p class="muted">Create a new tracked prescription</p></div></div>
         <form id="book-form" class="panel form-grid">
-          <label>Hospital / unit<select id="book-site" required><option value="" disabled selected>Select hospital/unit…</option></select></label>
-          <label>Ward<select id="book-ward"><option value="">No ward — book directly to the hospital/unit</option></select></label>
           <label class="span-2">Dispensary<select id="book-dispensary" required></select></label>
+          <label>Ward<select id="book-ward"><option value="">Select a ward…</option></select></label>
+          <label>Hospital / unit<select id="book-site" required><option value="" disabled selected>Select hospital/unit…</option></select></label>
           <label>Hospital number<input id="book-hn" maxlength="64" required /></label>
           <div id="book-hn-warning" class="hn-warning span-2 hidden"></div>
           <label>Patient initials<input id="book-initials" maxlength="12" placeholder="Optional" /></label>
@@ -86,7 +86,7 @@
 
       <section id="view-history" class="view">
         <div class="page-head"><div><h2>History</h2><p class="muted">Search tracked prescriptions</p></div></div>
-        <div class="panel search-row"><input id="history-search" placeholder="Hospital number or tracking ID" /><select id="history-state"><option value="">All states</option><option>active</option><option>suspended</option><option>ready</option><option>collected</option><option>cancelled</option></select><button id="history-btn" class="btn secondary">Search</button></div>
+        <div class="panel search-row"><input id="history-search" placeholder="Hospital number" /><select id="history-state"><option value="">All states</option><option>active</option><option>suspended</option><option>ready</option><option>collected</option><option>cancelled</option></select><button id="history-btn" class="btn secondary">Search</button></div>
         <div class="table-card"><table><thead><tr><th>ID</th><th>Hospital no.</th><th>Ward</th><th>State</th><th>Stage</th><th>Received</th></tr></thead><tbody id="history-body"></tbody></table></div>
       </section>
 
@@ -158,6 +158,23 @@
           <form id="reason-form" class="filters" style="margin-bottom:12px"><input id="reason-name" placeholder="New reason" required /><button class="btn secondary" type="submit">Add reason</button></form>
           <div class="table-card"><table><thead><tr><th>Reason</th><th></th></tr></thead><tbody id="reason-body"></tbody></table></div>
         </div>
+
+        <div class="panel" style="margin-top:16px">
+          <h3>Feature toggles</h3>
+          <label class="check-label"><input id="setting-mark-collected" type="checkbox" /> Enable "Mark collected / dispatched" step</label>
+          <p class="muted tiny">Switch off if your workflow ends at Checked and doesn't track a separate collection/dispatch step.</p>
+        </div>
+
+        <div id="danger-zone" class="panel danger-zone hidden" style="margin-top:16px">
+          <h3>Danger zone — superuser only</h3>
+          <p class="muted tiny">Wipes every prescription, its full history, and the audit log. Sites, dispensaries, wards, prescription types, suspension reasons and user accounts are <strong>not</strong> touched. For pre-go-live testing only — there is no undo, and this contradicts "nothing is ever deleted" everywhere else in this app on purpose.</p>
+          <button id="clear-data-toggle-btn" class="btn danger" type="button">Clear all prescription data and logs…</button>
+          <div id="clear-data-confirm" class="filters hidden" style="margin-top:10px">
+            <input id="clear-data-phrase" placeholder='Type CLEAR ALL DATA to confirm' />
+            <button id="clear-data-confirm-btn" class="btn danger" type="button">Confirm — wipe everything</button>
+            <button id="clear-data-cancel-btn" class="btn ghost" type="button">Cancel</button>
+          </div>
+        </div>
       </section>
 
       <section id="view-audit" class="view">
@@ -169,7 +186,7 @@
   </div>
 
   <dialog id="rx-dialog">
-    <div class="dialog-head"><div><h2 id="rx-title">Prescription</h2><p id="rx-subtitle" class="muted"></p></div><button id="rx-close" class="icon-btn" aria-label="Close">×</button></div>
+    <div class="dialog-head"><div><h2 id="rx-title">Prescription</h2><p id="rx-subtitle" class="muted"></p></div><button id="rx-close" class="icon-btn" aria-label="Close"><svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor"><path d="M18.3 5.71 12 12.01l-6.3-6.3-1.4 1.42 6.29 6.29-6.3 6.3 1.42 1.41 6.29-6.3 6.3 6.3 1.41-1.41-6.3-6.3 6.3-6.29z"/></svg></button></div>
     <div id="rx-facts" class="rx-facts"></div>
     <div id="rx-stepper" class="rx-stepper"></div>
     <div id="rx-actions" class="rx-actions-row"></div>
@@ -190,7 +207,7 @@
   </dialog>
 
   <dialog id="manage-user-dialog">
-    <div class="dialog-head"><div><h2>Manage user</h2><p id="manage-user-name" class="muted"></p></div><button id="manage-user-close" class="icon-btn" aria-label="Close">×</button></div>
+    <div class="dialog-head"><div><h2>Manage user</h2><p id="manage-user-name" class="muted"></p></div><button id="manage-user-close" class="icon-btn" aria-label="Close"><svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor"><path d="M18.3 5.71 12 12.01l-6.3-6.3-1.4 1.42 6.29 6.29-6.3 6.3 1.42 1.41 6.29-6.3 6.3 6.3 1.41-1.41-6.3-6.3 6.3-6.29z"/></svg></button></div>
     <form id="manage-user-form" class="form-grid">
       <label>Display name<input id="mu-display" required /></label>
       <label>Role<select id="mu-role"><option value="assistant">Pharmacy Assistant</option><option value="technician">Pharmacy Technician</option><option value="pharmacist">Pharmacist</option><option value="admin">Admin</option><option value="governance">Governance</option></select></label>
