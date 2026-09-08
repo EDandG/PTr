@@ -219,3 +219,51 @@ select.searchable-native{display:none}
 #disp-sites-table{min-width:0}
 #disp-sites-table th,#disp-sites-table td{text-align:center;white-space:nowrap}
 #disp-sites-table th:first-child,#disp-sites-table td:first-child{text-align:left}
+
+/* ---------- Prescription detail popup: concise stepper + single action button ---------- */
+:root{
+  --act-screen:#0c5cab;
+  --act-dispense:#11a3a8;
+  --act-final:#d2931b;
+  --act-checked:#2f9e44;
+}
+.rx-facts{margin:10px 0 16px}
+.rx-hn-line{font-size:18px;font-weight:800;color:var(--navy-deep);margin-bottom:6px}
+.rx-hn-line .state-pill{margin-left:8px;vertical-align:middle}
+.rx-chips{display:flex;flex-wrap:wrap;gap:6px}
+.rx-chip{background:#eef6fb;border:1px solid #d7e8f2;border-radius:20px;padding:4px 11px;font-size:12px;font-weight:700;color:#33587d}
+.rx-chip-overdue{background:#fff0ef;border-color:#f3c7c3;color:var(--red)}
+
+.rx-stepper{display:flex;align-items:flex-start;margin:16px 0 20px}
+.rx-step{display:flex;flex-direction:column;align-items:center;text-align:center;flex:1;min-width:0}
+.rx-step-dot{width:26px;height:26px;border-radius:50%;border:2px solid var(--line);background:#fff;display:grid;place-items:center;font-size:13px;font-weight:900;color:#fff;margin-bottom:6px}
+.rx-step.done .rx-step-dot{background:var(--green);border-color:var(--green)}
+.rx-step.current .rx-step-dot{border-color:var(--blue);box-shadow:0 0 0 4px var(--cyan-soft)}
+.rx-step.suspended .rx-step-dot{border-color:var(--susp);box-shadow:0 0 0 4px #ece8fb}
+.rx-step.cancelled .rx-step-dot{border-color:var(--red)}
+.rx-step-label{font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:.04em;color:var(--navy-deep)}
+.rx-step-caption{font-size:11px;color:var(--muted);margin-top:2px;line-height:1.3;padding:0 4px}
+.rx-step-line{flex:0 0 24px;height:2px;background:var(--line);margin-top:13px}
+
+.rx-actions-row{display:flex;align-items:center;gap:14px;margin:6px 0 14px;min-height:56px}
+.rx-action-btn{width:56px;height:56px;border-radius:50%;border:0;background:var(--act-color,var(--act-screen));color:#fff;font-size:20px;display:grid;place-items:center;cursor:pointer;box-shadow:0 6px 16px rgba(7,48,95,.22);transition:background .25s ease,transform .1s ease}
+.rx-action-btn:hover{transform:scale(1.06)}
+.rx-action-btn.flash-success{background:var(--act-checked)!important}
+.icon-btn-lg{width:44px;height:44px;border-radius:50%;border:1px solid var(--line);background:#fff;color:var(--navy);font-size:14px;display:grid;place-items:center;cursor:pointer}
+.icon-btn-lg:hover{background:var(--cyan-soft)}
+.rx-claimed-note{font-size:13px;font-weight:700;color:var(--muted);font-style:italic}
+
+.rx-more{margin-top:10px;border-top:1px solid var(--line);padding-top:10px}
+.rx-more summary{cursor:pointer;font-weight:700;color:var(--blue);font-size:13px;list-style:none}
+.rx-more summary::-webkit-details-marker{display:none}
+.rx-more summary:before{content:"▸ ";}
+.rx-more[open] summary:before{content:"▾ ";}
+.rx-more .panel{margin-top:10px}
+
+/* Live-queue process sections (bucket) vs type sub-sections (group) */
+tr.bucket-heading{background:linear-gradient(180deg,var(--navy),var(--navy-deep))!important}
+tr.bucket-heading td{padding:10px 14px;font-size:12px;font-weight:900;text-transform:uppercase;letter-spacing:.06em;color:#fff;cursor:default}
+tr.bucket-heading .group-count{font-weight:800;color:#cfe3f5;text-transform:none;letter-spacing:0;margin-left:6px}
+
+/* Duplicate hospital-number warning on the booking form */
+.hn-warning{background:#fff7e6;border:1px solid #f2d38a;color:#8a5a00;border-radius:3px;padding:9px 12px;font-size:13px;font-weight:600;line-height:1.4}
