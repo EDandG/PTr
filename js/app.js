@@ -309,15 +309,20 @@ function renderQueueRow(r){
   const cls=['row-clickable']; if(r.state==='suspended') cls.push('row-suspended');
   // "Being dispensed by" only matters while it's actually the live claim -
   // i.e. still sitting in Awaiting dispensing with someone on it.
-  const beingDispensedLine = (r.stage_code==='awaiting_labelling' && r.dispensing_started_by_name)
-    ? `<br><small class="muted">Being dispensed by ${esc(r.dispensing_started_by_name)}</small>` : '';
+  const captionParts=[];
+  if(r.needed_by) captionParts.push(`Needed by ${fmt(r.needed_by)}`);
+  if(r.stage_code==='awaiting_labelling' && r.dispensing_started_by_name) captionParts.push(`Being dispensed by ${esc(r.dispensing_started_by_name)}`);
+  // Caption line is always rendered (even empty) so every row reserves the
+  // same vertical space and rows stay a uniform height, whether or not
+  // they actually have anything to caption.
+  const caption = `<div class="row-caption">${captionParts.length?`<small class="muted">${captionParts.join(' · ')}</small>`:''}</div>`;
   return `<tr class="${cls.join(' ')}"${kpiFillStyle(r)} data-open-rx="${r.id}">`+
     `<td data-label="ID">#${r.display_id}</td>`+
     `<td data-label="Hospital no."><strong>${esc(r.hospital_number)}</strong></td>`+
     `<td data-label="Ward">${esc(r.ward_name||'—')}</td>`+
     `<td data-label="Type">${esc(r.prescription_type_name||'—')}${r.contains_cd?' · CD':''}</td>`+
     `<td data-label="Items">${r.item_count??'—'}</td>`+
-    `<td data-label="Stage">${esc(r.stage_name)}${r.state==='suspended'?' · Suspended':''}${r.needed_by?`<br><small class="muted">Needed by ${fmt(r.needed_by)}</small>`:''}${beingDispensedLine}</td>`+
+    `<td data-label="Stage">${esc(r.stage_name)}${r.state==='suspended'?' · Suspended':''}${caption}</td>`+
     `<td data-label="Elapsed" class="elapsed-cell">${formatDuration(r.elapsed_minutes)}</td></tr>`;
 }
 // Which process bucket a row belongs to. Suspended items get pulled into
