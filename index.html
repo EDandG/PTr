@@ -71,6 +71,7 @@
           <label>Ward<select id="book-ward"><option value="">No ward — book directly to the hospital/unit</option></select></label>
           <label class="span-2">Dispensary<select id="book-dispensary" required></select></label>
           <label>Hospital number<input id="book-hn" maxlength="64" required /></label>
+          <div id="book-hn-warning" class="hn-warning span-2 hidden"></div>
           <label>Patient initials<input id="book-initials" maxlength="12" placeholder="Optional" /></label>
           <label>Prescription type<select id="book-type" required></select></label>
           <label>Number of items<input id="book-items" type="number" min="0" max="200" /></label>
@@ -169,14 +170,23 @@
 
   <dialog id="rx-dialog">
     <div class="dialog-head"><div><h2 id="rx-title">Prescription</h2><p id="rx-subtitle" class="muted"></p></div><button id="rx-close" class="icon-btn" aria-label="Close">×</button></div>
-    <div id="rx-summary" class="detail-grid"></div>
-    <div id="rx-actions" class="action-row"></div>
-    <div id="correction-panel" class="panel compact admin-correction hidden">
-      <h3>Correct hospital number</h3>
-      <div class="search-row"><input id="correct-hn" placeholder="New hospital number" /><input id="correct-reason" placeholder="Reason for correction" /><button id="correct-btn" class="btn secondary">Correct</button></div>
-    </div>
+    <div id="rx-facts" class="rx-facts"></div>
+    <div id="rx-stepper" class="rx-stepper"></div>
+    <div id="rx-actions" class="rx-actions-row"></div>
     <div id="suspend-panel" class="panel compact hidden"><h3>Suspend prescription</h3><div class="search-row"><select id="suspend-reason"></select><input id="suspend-note" placeholder="Note (required if 'Other')" /><button id="suspend-btn" class="btn danger">Suspend</button></div></div>
-    <h3>Timeline</h3><div id="timeline" class="timeline"></div>
+    <details class="rx-more">
+      <summary>More options</summary>
+      <div id="correction-panel" class="panel compact admin-correction hidden">
+        <h3>Correct hospital number</h3>
+        <div class="search-row"><input id="correct-hn" placeholder="New hospital number" /><input id="correct-reason" placeholder="Reason for correction" /><button id="correct-btn" class="btn secondary">Correct</button></div>
+      </div>
+      <button id="cancel-toggle-btn" class="btn ghost hidden" type="button">Cancel prescription…</button>
+      <div id="cancel-panel" class="panel compact hidden">
+        <h3>Cancel prescription</h3>
+        <div class="search-row"><input id="cancel-reason" placeholder="Reason for cancellation" /><button id="cancel-confirm-btn" class="btn danger">Confirm cancel</button></div>
+      </div>
+      <h3>Full timeline</h3><div id="timeline" class="timeline"></div>
+    </details>
   </dialog>
 
   <dialog id="manage-user-dialog">
