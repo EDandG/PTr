@@ -45,6 +45,8 @@ input:focus,select:focus,textarea:focus{outline:none;border-color:var(--cyan);bo
 /* BUTTONS */
 .btn{border:0;border-radius:3px;padding:10px 15px;font-weight:800;transition:transform .12s ease,box-shadow .12s ease,background .12s ease;letter-spacing:.005em}
 .btn:hover{transform:translateY(-1px)}
+.btn:active{transform:translateY(0)}
+.btn:disabled{opacity:.5;cursor:not-allowed;transform:none!important}
 .btn.primary{background:linear-gradient(105deg,var(--navy),var(--blue));color:white;box-shadow:0 6px 16px rgba(8,54,111,.16)}
 .btn.primary:hover{box-shadow:0 8px 22px rgba(8,54,111,.24)}
 .btn.secondary{background:#e9f6fb;color:var(--navy);border:1px solid #c8eaf4}
@@ -96,7 +98,8 @@ tbody tr{transition:background .12s ease}tbody tr:hover{background:#f3faff}
 
 .kpi{display:inline-flex;align-items:center;gap:6px;font-weight:800;text-transform:capitalize}.dot{width:9px;height:9px;border-radius:50%;display:inline-block}.dot.green{background:var(--green)}.dot.amber{background:var(--amber)}.dot.red{background:var(--red)}.dot.suspended{background:var(--susp)}
 .state-pill{padding:4px 8px;border-radius:2px;background:#edf5fa;border:1px solid #d7e8f2;font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:.04em;color:#33587d}
-.icon-btn{border:0;background:transparent;font-size:26px;color:var(--navy)}
+.icon-btn{border:0;background:transparent;color:var(--muted);width:34px;height:34px;border-radius:50%;display:grid;place-items:center;transition:background .15s ease,color .15s ease}
+.icon-btn:hover{background:#eef6fb;color:var(--navy)}
 
 dialog{width:min(920px,94vw);max-height:88vh;border:1px solid #cfdfeb;border-radius:4px;padding:24px;box-shadow:0 28px 80px rgba(4,37,75,.28);color:var(--ink);background:#fff}
 dialog:before{content:"";position:absolute;top:0;left:0;width:100%;height:6px;background:linear-gradient(90deg,var(--navy) 0 36%,var(--cyan) 36% 70%,var(--lime) 70%)}
@@ -117,7 +120,11 @@ h3{color:var(--navy-deep)}
 
 /* ---------- v1.4: dense PTS5/TMS-style worklist board ---------- */
 :root{--rp-set:#0c5cab;--rp-unset:#bf3b32;}
-table.dense th,table.dense td{padding:8px 10px;font-size:13px}
+table.dense th,table.dense td{padding:8px 10px;font-size:13px;vertical-align:middle}
+/* Reserved caption line under the Stage cell (Needed by / Being dispensed
+   by) - always rendered, even empty, so every row is the same height
+   whether or not it actually has a caption to show. */
+.row-caption{min-height:15px;margin-top:2px;line-height:1.3}
 /* No forced min-width - let the table shrink and wrap rather than force a
    horizontal scrollbar; below a breakpoint it reflows into cards instead. */
 .table-card.dense tbody tr td:first-child{font-variant-numeric:tabular-nums;font-weight:800;color:var(--navy-deep)}
@@ -141,6 +148,11 @@ tr.row-complete{opacity:.75}
 .rp-strip .rp-none{opacity:.65;font-style:italic;font-weight:600}
 .rp-strip .rp-gphc{opacity:.7;font-weight:600;font-size:10px;letter-spacing:.03em;margin-left:4px}
 .rp-strip button{margin-left:auto;padding:6px 12px;font-size:11px}
+/* .btn.ghost/.btn.secondary default to navy text on a pale fill, which
+   disappears against this strip's dark navy background - override both
+   to a light, clearly-visible treatment specific to this context. */
+.rp-strip .btn{background:rgba(255,255,255,.14);color:#fff;border:1px solid rgba(255,255,255,.5);font-weight:800}
+.rp-strip .btn:hover{background:rgba(255,255,255,.26);border-color:#fff}
 .tabs{top:76px}
 .rp-strip ~ .tabs{top:114px}
 main{padding-top:24px}
@@ -236,7 +248,8 @@ select.searchable-native{display:none}
 
 .rx-stepper{display:flex;align-items:flex-start;margin:16px 0 20px}
 .rx-step{display:flex;flex-direction:column;align-items:center;text-align:center;flex:1;min-width:0}
-.rx-step-dot{width:26px;height:26px;border-radius:50%;border:2px solid var(--line);background:#fff;display:grid;place-items:center;font-size:13px;font-weight:900;color:#fff;margin-bottom:6px}
+.rx-step-dot{width:26px;height:26px;border-radius:50%;border:2px solid var(--line);background:#fff;display:grid;place-items:center;color:#fff;margin-bottom:6px;transition:background .2s ease,border-color .2s ease,box-shadow .2s ease}
+.rx-step-dot svg{display:block}
 .rx-step.done .rx-step-dot{background:var(--green);border-color:var(--green)}
 .rx-step.current .rx-step-dot{border-color:var(--blue);box-shadow:0 0 0 4px var(--cyan-soft)}
 .rx-step.suspended .rx-step-dot{border-color:var(--susp);box-shadow:0 0 0 4px #ece8fb}
@@ -246,12 +259,25 @@ select.searchable-native{display:none}
 .rx-step-line{flex:0 0 24px;height:2px;background:var(--line);margin-top:13px}
 
 .rx-actions-row{display:flex;align-items:center;gap:14px;margin:6px 0 14px;min-height:56px}
-.rx-action-btn{width:56px;height:56px;border-radius:50%;border:0;background:var(--act-color,var(--act-screen));color:#fff;font-size:20px;display:grid;place-items:center;cursor:pointer;box-shadow:0 6px 16px rgba(7,48,95,.22);transition:background .25s ease,transform .1s ease}
-.rx-action-btn:hover{transform:scale(1.06)}
+.rx-action-btn{
+  width:58px;height:58px;border-radius:50%;border:0;position:relative;isolation:isolate;
+  background:var(--act-color,var(--act-screen));
+  background:
+    radial-gradient(circle at 32% 28%, rgba(255,255,255,.35), rgba(255,255,255,0) 55%),
+    linear-gradient(155deg, color-mix(in srgb, var(--act-color,var(--act-screen)) 88%, white 12%), var(--act-color,var(--act-screen)) 60%);
+  color:#fff;display:grid;place-items:center;cursor:pointer;
+  box-shadow:0 8px 18px -4px rgba(7,48,95,.35), inset 0 -2px 3px rgba(0,0,0,.12), inset 0 1px 1px rgba(255,255,255,.4);
+  transition:transform .15s ease,box-shadow .2s ease,background .3s ease;
+}
+.rx-action-btn svg{display:block;filter:drop-shadow(0 1px 1px rgba(0,0,0,.18));margin-left:2px}
+.rx-action-btn:hover{transform:translateY(-2px) scale(1.05);box-shadow:0 12px 24px -4px rgba(7,48,95,.4), inset 0 -2px 3px rgba(0,0,0,.12), inset 0 1px 1px rgba(255,255,255,.45)}
+.rx-action-btn:active{transform:translateY(0) scale(.97)}
 .rx-action-btn.flash-success{background:var(--act-checked)!important}
-.icon-btn-lg{width:44px;height:44px;border-radius:50%;border:1px solid var(--line);background:#fff;color:var(--navy);font-size:14px;display:grid;place-items:center;cursor:pointer}
-.icon-btn-lg:hover{background:var(--cyan-soft)}
-.rx-claimed-note{font-size:13px;font-weight:700;color:var(--muted);font-style:italic}
+.icon-btn-lg{width:46px;height:46px;border-radius:50%;border:1px solid var(--line);background:#fff;color:var(--navy);display:grid;place-items:center;cursor:pointer;box-shadow:0 2px 6px rgba(7,48,95,.06);transition:background .15s ease,border-color .15s ease,transform .1s ease}
+.icon-btn-lg svg{display:block}
+.icon-btn-lg:hover{background:var(--cyan-soft);border-color:var(--cyan);transform:translateY(-1px)}
+.icon-btn-lg:active{transform:translateY(0)}
+.rx-claimed-note{display:inline-flex;align-items:center;gap:7px;font-size:12px;font-weight:800;color:var(--susp);background:#f2effa;border:1px solid #ded6f3;border-radius:20px;padding:9px 16px}
 
 .rx-more{margin-top:10px;border-top:1px solid var(--line);padding-top:10px}
 .rx-more summary{cursor:pointer;font-weight:700;color:var(--blue);font-size:13px;list-style:none}
@@ -267,3 +293,7 @@ tr.bucket-heading .group-count{font-weight:800;color:#cfe3f5;text-transform:none
 
 /* Duplicate hospital-number warning on the booking form */
 .hn-warning{background:#fff7e6;border:1px solid #f2d38a;color:#8a5a00;border-radius:3px;padding:9px 12px;font-size:13px;font-weight:600;line-height:1.4}
+
+/* Danger zone (superuser-only clear-all-data) */
+.danger-zone{border:1px solid #f3c7c3;background:#fff8f7}
+.danger-zone h3{color:var(--red)}
