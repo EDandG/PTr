@@ -38,15 +38,17 @@
 
     <div id="tiles-trigger" class="tiles-trigger" aria-hidden="true"></div>
     <aside id="tiles-flyout" class="tiles-flyout" aria-label="Queue summary">
-      <h3>Live queue summary</h3>
+      <h3>Live queue summary <small class="tiles-hint-inline">— click to filter</small></h3>
       <div class="summary-grid summary-grid-vertical">
-        <div class="summary-card"><span>Active</span><strong id="sum-active">0</strong></div>
-        <div class="summary-card"><span>Suspended</span><strong id="sum-suspended">0</strong></div>
-        <div class="summary-card"><span>Ready</span><strong id="sum-ready">0</strong></div>
-        <div class="summary-card"><span>Over target</span><strong id="sum-red">0</strong></div>
+        <button type="button" class="summary-card summary-card-btn" data-filter-status="active"><span>Active</span><strong id="sum-active">0</strong></button>
+        <button type="button" class="summary-card summary-card-btn" data-filter-status="suspended"><span>Suspended</span><strong id="sum-suspended">0</strong></button>
+        <button type="button" class="summary-card summary-card-btn" data-filter-status="ready"><span>Ready</span><strong id="sum-ready">0</strong></button>
+        <button type="button" class="summary-card summary-card-btn" data-filter-status="overtarget"><span>Over target</span><strong id="sum-red">0</strong></button>
       </div>
-      <h3 style="margin-top:16px">By type</h3>
+      <h3 style="margin-top:16px">By type <small class="tiles-hint-inline">— click to jump</small></h3>
       <div id="tiles-by-type" class="tiles-by-type"></div>
+      <h3 style="margin-top:16px">By hospital <small class="tiles-hint-inline">— click to filter</small></h3>
+      <div id="tiles-by-site" class="tiles-by-type"></div>
     </aside>
 
     <nav class="tabs" aria-label="Primary">
@@ -61,6 +63,7 @@
     <main>
       <section id="view-dashboard" class="view active-view">
         <div class="page-head"><div><h2>Live queue</h2><p class="muted">Current dispensary workload — move your mouse to the left edge for the summary</p></div><div class="filters"><select id="dispensary-filter"></select><button id="refresh-btn" class="btn secondary">Refresh</button></div></div>
+        <div id="active-filter-bar" class="active-filter-bar hidden"><span id="active-filter-text"></span><button id="clear-filter-btn" class="btn ghost" type="button">Clear filter</button></div>
         <div class="table-card dense"><table class="dense"><thead><tr><th>ID</th><th>Hospital no.</th><th>Ward</th><th>Type</th><th>Items</th><th>Stage</th><th>Elapsed</th></tr></thead><tbody id="queue-body"></tbody></table></div>
       </section>
 
@@ -116,6 +119,24 @@
           <form id="disp-form" class="panel"><h3>1. Add dispensary</h3><p class="perm-note">Start here — a dispensary can serve more than one hospital, so it isn't tied to a site at creation. Link it to hospitals below once both exist.</p><label>Name<input id="disp-name" required /></label><button class="btn secondary" type="submit">Add dispensary</button></form>
           <form id="site-form" class="panel"><h3>2. Add hospital site</h3><label>Name<input id="site-name" required /></label><button class="btn secondary" type="submit">Add site</button></form>
           <form id="ward-form" class="panel"><h3>3. Add ward/location</h3><label>Site<select id="ward-site" required></select></label><label>Name<input id="ward-name" required /></label><button class="btn secondary" type="submit">Add ward</button></form>
+        </div>
+
+        <div class="settings-grid" style="margin-top:16px">
+          <div class="panel">
+            <h3>Dispensaries</h3>
+            <p class="muted tiny">Rename any dispensary here — saved when you click Save.</p>
+            <div class="table-card"><table><thead><tr><th>Name</th><th></th></tr></thead><tbody id="disp-list-body"></tbody></table></div>
+          </div>
+          <div class="panel">
+            <h3>Hospital sites</h3>
+            <p class="muted tiny">Rename any hospital/unit here — saved when you click Save.</p>
+            <div class="table-card"><table><thead><tr><th>Name</th><th></th></tr></thead><tbody id="site-list-body"></tbody></table></div>
+          </div>
+          <div class="panel">
+            <h3>Wards</h3>
+            <p class="muted tiny">Rename any ward here — saved when you click Save.</p>
+            <div class="table-card"><table><thead><tr><th>Hospital</th><th>Ward</th><th>Status</th><th></th></tr></thead><tbody id="ward-list-body"></tbody></table></div>
+          </div>
         </div>
 
         <div class="panel" style="margin-top:16px">
@@ -179,7 +200,7 @@
 
       <section id="view-audit" class="view">
         <div class="page-head"><div><h2>Audit log</h2><p class="muted">Administrative and clinical activity, by hospital number</p></div></div>
-        <div class="panel search-row"><input id="audit-search" placeholder="Filter by hospital number" /><button id="audit-search-btn" class="btn secondary">Filter</button><button id="audit-clear-btn" class="btn ghost">Clear</button></div>
+        <div class="panel search-row"><input id="audit-search" placeholder="Filter by hospital number" /><button id="audit-search-btn" class="btn secondary">Filter</button><button id="audit-clear-btn" class="btn ghost">Clear</button><button id="audit-export-btn" class="btn primary" type="button">Export to Excel</button></div>
         <div class="table-card"><table><thead><tr><th>Time</th><th>Action</th><th>Hospital no.</th><th>Entity</th><th>User</th><th>Details</th></tr></thead><tbody id="audit-body"></tbody></table></div>
       </section>
     </main>
@@ -188,22 +209,39 @@
   <dialog id="rx-dialog">
     <div class="dialog-head"><div><h2 id="rx-title">Prescription</h2><p id="rx-subtitle" class="muted"></p></div><button id="rx-close" class="icon-btn" aria-label="Close"><svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor"><path d="M18.3 5.71 12 12.01l-6.3-6.3-1.4 1.42 6.29 6.29-6.3 6.3 1.42 1.41 6.29-6.3 6.3 6.3 1.41-1.41-6.3-6.3 6.3-6.29z"/></svg></button></div>
     <div id="rx-facts" class="rx-facts"></div>
-    <div id="rx-stepper" class="rx-stepper"></div>
-    <div id="rx-actions" class="rx-actions-row"></div>
-    <div id="suspend-panel" class="panel compact hidden"><h3>Suspend prescription</h3><div class="search-row"><select id="suspend-reason"></select><input id="suspend-note" placeholder="Note (required if 'Other')" /><button id="suspend-btn" class="btn danger">Suspend</button></div></div>
-    <details class="rx-more">
-      <summary>More options</summary>
-      <div id="correction-panel" class="panel compact admin-correction hidden">
-        <h3>Correct hospital number</h3>
-        <div class="search-row"><input id="correct-hn" placeholder="New hospital number" /><input id="correct-reason" placeholder="Reason for correction" /><button id="correct-btn" class="btn secondary">Correct</button></div>
+
+    <div class="rx-tabs">
+      <button type="button" class="rx-tab active" data-rx-tab="details">Details</button>
+      <button type="button" class="rx-tab" data-rx-tab="timeline">Timeline</button>
+    </div>
+
+    <div id="rx-tab-details" class="rx-tab-panel">
+      <div id="rx-stepper" class="rx-stepper"></div>
+      <div class="rx-actions-wrap">
+        <div id="rx-actions" class="rx-actions-row"></div>
+        <div id="rx-confirm-pop" class="rx-confirm-pop hidden">
+          <p id="rx-confirm-text"></p>
+          <div class="row"><button id="rx-confirm-yes" type="button" class="rx-confirm-btn">Confirm</button><button id="rx-confirm-no" type="button" class="rx-confirm-cancel">Cancel</button></div>
+        </div>
       </div>
-      <button id="cancel-toggle-btn" class="btn ghost hidden" type="button">Cancel prescription…</button>
-      <div id="cancel-panel" class="panel compact hidden">
-        <h3>Cancel prescription</h3>
-        <div class="search-row"><input id="cancel-reason" placeholder="Reason for cancellation" /><button id="cancel-confirm-btn" class="btn danger">Confirm cancel</button></div>
-      </div>
-      <h3>Full timeline</h3><div id="timeline" class="timeline"></div>
-    </details>
+      <div id="suspend-panel" class="panel compact hidden"><h3>Suspend prescription</h3><div class="search-row"><select id="suspend-reason"></select><input id="suspend-note" placeholder="Note (required if 'Other')" /><button id="suspend-btn" class="btn danger">Suspend</button></div></div>
+      <details class="rx-more">
+        <summary>More options</summary>
+        <div id="correction-panel" class="panel compact admin-correction hidden">
+          <h3>Correct hospital number</h3>
+          <div class="search-row"><input id="correct-hn" placeholder="New hospital number" /><input id="correct-reason" placeholder="Reason for correction" /><button id="correct-btn" class="btn secondary">Correct</button></div>
+        </div>
+        <button id="cancel-toggle-btn" class="btn ghost hidden" type="button">Cancel prescription…</button>
+        <div id="cancel-panel" class="panel compact hidden">
+          <h3>Cancel prescription</h3>
+          <div class="search-row"><input id="cancel-reason" placeholder="Reason for cancellation" /><button id="cancel-confirm-btn" class="btn danger">Confirm cancel</button></div>
+        </div>
+      </details>
+    </div>
+
+    <div id="rx-tab-timeline" class="rx-tab-panel hidden">
+      <div id="timeline" class="timeline"></div>
+    </div>
   </dialog>
 
   <dialog id="manage-user-dialog">
