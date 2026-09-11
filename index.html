@@ -6,8 +6,9 @@
   <meta name="robots" content="noindex,nofollow" />
   <title>Prescription Tracker by ED&amp;G&trade;</title>
   <link rel="stylesheet" href="css/app.css" />
-  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
-  <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; connect-src 'self' https://*.supabase.co wss://*.supabase.co; img-src 'self' data:; frame-ancestors 'none'; base-uri 'self'; form-action 'self'; object-src 'none'">
+  <script src="./vendor/supabase-js.min.js"></script>
+  <script src="./vendor/xlsx.full.min.js"></script>
   <script src="config.js"></script>
 </head>
 <body>
@@ -47,7 +48,7 @@
       </div>
       <h3 style="margin-top:16px">By type <small class="tiles-hint-inline">— click to jump</small></h3>
       <div id="tiles-by-type" class="tiles-by-type"></div>
-      <h3 style="margin-top:16px">By hospital <small class="tiles-hint-inline">— click to filter</small></h3>
+      <h3 style="margin-top:16px">By site <small class="tiles-hint-inline">— click to filter</small></h3>
       <div id="tiles-by-site" class="tiles-by-type"></div>
     </aside>
 
@@ -63,6 +64,15 @@
     <main>
       <section id="view-dashboard" class="view active-view">
         <div class="page-head"><div><h2>Live queue</h2><p class="muted">Current dispensary workload — move your mouse to the left edge for the summary</p></div><div class="filters"><select id="dispensary-filter"></select><button id="refresh-btn" class="btn secondary">Refresh</button></div></div>
+        <div id="pressure-banner" class="pressure-banner hidden"></div>
+        <div class="queue-toolbar">
+          <div class="rx-tabs" id="category-tabs">
+            <button type="button" class="rx-tab active" data-category="">All types</button>
+            <button type="button" class="rx-tab" data-category="inpatient">Inpatient</button>
+            <button type="button" class="rx-tab" data-category="tto">TTO</button>
+          </div>
+          <input id="queue-search" placeholder="Search hospital number — shows across all types while searching" />
+        </div>
         <div id="active-filter-bar" class="active-filter-bar hidden"><span id="active-filter-text"></span><button id="clear-filter-btn" class="btn ghost" type="button">Clear filter</button></div>
         <div class="table-card dense"><table class="dense"><thead><tr><th>ID</th><th>Hospital no.</th><th>Ward</th><th>Type</th><th>Items</th><th>Stage</th><th>Elapsed</th></tr></thead><tbody id="queue-body"></tbody></table></div>
       </section>
@@ -89,12 +99,12 @@
 
       <section id="view-history" class="view">
         <div class="page-head"><div><h2>History</h2><p class="muted">Search tracked prescriptions</p></div></div>
-        <div class="panel search-row"><input id="history-search" placeholder="Hospital number" /><select id="history-state"><option value="">All states</option><option>active</option><option>suspended</option><option>ready</option><option>collected</option><option>cancelled</option></select><button id="history-btn" class="btn secondary">Search</button></div>
+        <div class="panel search-row"><input id="history-search" placeholder="Hospital number" /><select id="history-state"><option value="">All states</option><option>active</option><option>suspended</option><option>ready</option><option>collected</option><option>dispatched</option><option>cancelled</option></select><button id="history-btn" class="btn secondary">Search</button></div>
         <div class="table-card"><table><thead><tr><th>ID</th><th>Hospital no.</th><th>Ward</th><th>State</th><th>Stage</th><th>Received</th></tr></thead><tbody id="history-body"></tbody></table></div>
       </section>
 
       <section id="view-users" class="view">
-        <div class="page-head"><div><h2>Users control panel</h2><p class="muted">Accounts, dispensary access and tickbox permissions — everything starts switched off</p></div></div>
+        <div class="page-head"><div><h2>Users control panel</h2><p class="muted">Accounts, dispensary access and tickbox permissions — everything starts switched off</p></div><div class="filters"><input id="user-search" placeholder="Search username or display name" /></div></div>
         <form id="create-user-form" class="panel form-grid">
           <label>Username<input id="user-username" minlength="3" required /></label>
           <label>Display name<input id="user-display" required /></label>
@@ -113,87 +123,116 @@
       </section>
 
       <section id="view-settings" class="view">
-        <div class="page-head"><div><h2>Configuration</h2><p class="muted">Dispensaries, sites, wards, prescription types and suspension reasons</p></div></div>
+        <div class="page-head"><div><h2>Configuration</h2><p class="muted">Dispensaries, sites, wards, prescription types and reasons</p></div></div>
 
-        <div class="settings-grid">
-          <form id="disp-form" class="panel"><h3>1. Add dispensary</h3><p class="perm-note">Start here — a dispensary can serve more than one hospital, so it isn't tied to a site at creation. Link it to hospitals below once both exist.</p><label>Name<input id="disp-name" required /></label><button class="btn secondary" type="submit">Add dispensary</button></form>
-          <form id="site-form" class="panel"><h3>2. Add hospital site</h3><label>Name<input id="site-name" required /></label><button class="btn secondary" type="submit">Add site</button></form>
-          <form id="ward-form" class="panel"><h3>3. Add ward/location</h3><label>Site<select id="ward-site" required></select></label><label>Name<input id="ward-name" required /></label><button class="btn secondary" type="submit">Add ward</button></form>
+        <div class="config-tabs">
+          <button type="button" class="config-tab active" data-config-tab="sites">Sites &amp; wards</button>
+          <button type="button" class="config-tab" data-config-tab="types">Prescription types</button>
+          <button type="button" class="config-tab" data-config-tab="reasons">Reasons</button>
+          <button type="button" class="config-tab" data-config-tab="pressure">Pressure thresholds</button>
+          <button type="button" class="config-tab danger-tab hidden" data-config-tab="danger">Danger zone</button>
         </div>
 
-        <div class="settings-grid" style="margin-top:16px">
+        <div id="config-tab-sites" class="config-tab-panel">
+          <div class="settings-grid">
+            <form id="disp-form" class="panel"><h3>1. Add dispensary</h3><p class="perm-note">Start here — a dispensary can serve more than one hospital, so it isn't tied to a site at creation. Link it to hospitals below once both exist.</p><label>Name<input id="disp-name" required /></label><button class="btn secondary" type="submit">Add dispensary</button></form>
+            <form id="site-form" class="panel"><h3>2. Add hospital site</h3><label>Name<input id="site-name" required /></label><button class="btn secondary" type="submit">Add site</button></form>
+            <form id="ward-form" class="panel"><h3>3. Add ward/location</h3><label>Site<select id="ward-site" required></select></label><label>Name<input id="ward-name" required /></label><button class="btn secondary" type="submit">Add ward</button></form>
+          </div>
+
+          <div class="settings-grid" style="margin-top:16px">
+            <div class="panel">
+              <h3>Dispensaries</h3>
+              <p class="muted tiny">Rename any dispensary here — saved when you click Save.</p>
+              <div class="table-card"><table><thead><tr><th>Name</th><th></th></tr></thead><tbody id="disp-list-body"></tbody></table></div>
+            </div>
+            <div class="panel">
+              <h3>Hospital sites</h3>
+              <p class="muted tiny">Rename any hospital/unit here — saved when you click Save.</p>
+              <div class="table-card"><table><thead><tr><th>Name</th><th></th></tr></thead><tbody id="site-list-body"></tbody></table></div>
+            </div>
+            <div class="panel">
+              <h3>Wards</h3>
+              <p class="muted tiny">Rename any ward here — saved when you click Save.</p>
+              <div class="table-card"><table><thead><tr><th>Hospital</th><th>Ward</th><th>Status</th><th></th></tr></thead><tbody id="ward-list-body"></tbody></table></div>
+            </div>
+          </div>
+
+          <div class="panel" style="margin-top:16px">
+            <h3>Dispensary ↔ hospital coverage</h3>
+            <p class="muted tiny">Tick every hospital a dispensary serves — saved immediately per tick. Coverage is by hospital, not by individual ward: ticking a hospital serves every ward under it automatically, including ones added later.</p>
+            <div class="table-card" id="disp-sites-wrap"><table id="disp-sites-table"><thead><tr><th>Dispensary</th></tr></thead><tbody id="disp-sites-body"></tbody></table></div>
+          </div>
+
+          <div class="panel" style="margin-top:16px">
+            <h3>Import sites &amp; wards from Excel</h3>
+            <p class="muted tiny">Two columns: <strong>Site</strong> (hospital name) and <strong>Ward</strong>. One row per ward. A site with no wards can appear once with the ward column blank. Existing sites/wards with matching names are left alone.</p>
+            <div class="filters" style="margin:10px 0">
+              <input id="import-file" type="file" accept=".xlsx,.xls,.csv" />
+              <button id="import-template-btn" class="btn ghost" type="button">Download template</button>
+            </div>
+            <div id="import-drop" class="import-drop">Drop a spreadsheet here, or use the file picker above</div>
+            <div id="import-preview" class="import-preview hidden"></div>
+            <div id="import-actions" class="filters hidden" style="margin-top:10px">
+              <button id="import-commit-btn" class="btn primary" type="button">Import rows</button>
+              <span id="import-summary" class="muted tiny"></span>
+            </div>
+          </div>
+        </div>
+
+        <div id="config-tab-types" class="config-tab-panel hidden">
           <div class="panel">
-            <h3>Dispensaries</h3>
-            <p class="muted tiny">Rename any dispensary here — saved when you click Save.</p>
-            <div class="table-card"><table><thead><tr><th>Name</th><th></th></tr></thead><tbody id="disp-list-body"></tbody></table></div>
+            <h3>Prescription types</h3>
+            <p class="muted tiny">Not a fixed list — create, retarget or retire types here. "Pre-screened" types skip straight to Awaiting Labelling and Assembly when booked in; anything else enters at Awaiting Screening first. Each type carries its own turnaround target (one KPI per type, in hours and minutes) rather than a per-line rule. Tick "TTO"/"Inpatient" so the live queue's view switcher knows which category this type belongs to.</p>
+            <form id="ptype-form" class="form-grid" style="margin-bottom:14px">
+              <label>Name<input id="ptype-name" required /></label>
+              <label class="check-label"><input id="ptype-prescreened" type="checkbox" /> Pre-screened (skips Awaiting Screening)</label>
+              <label class="check-label"><input id="ptype-tto" type="checkbox" /> TTO category</label>
+              <label class="check-label"><input id="ptype-inpatient" type="checkbox" /> Inpatient category</label>
+              <label class="check-label"><input id="ptype-collected" type="checkbox" checked /> Enable "Mark collected" step</label>
+              <label class="check-label"><input id="ptype-dispatched" type="checkbox" /> Enable "Mark dispatched" step</label>
+              <label>Turns amber after<span class="filters"><input type="number" min="0" id="ptype-amber-h" placeholder="h" style="width:56px">h <input type="number" min="0" max="59" id="ptype-amber-m" placeholder="m" style="width:56px">m</span></label>
+              <label>Turns red after<span class="filters"><input type="number" min="0" id="ptype-red-h" placeholder="h" style="width:56px">h <input type="number" min="0" max="59" id="ptype-red-m" placeholder="m" style="width:56px">m</span></label>
+              <div class="span-2"><button class="btn primary" type="submit">Add prescription type</button></div>
+            </form>
+            <div class="table-card"><table><thead><tr><th>Type</th><th>Pre-screened?</th><th>TTO</th><th>Inpatient</th><th>Collected</th><th>Dispatched</th><th>Turns amber after</th><th>Turns red after</th><th>Default</th><th></th></tr></thead><tbody id="ptype-body"></tbody></table></div>
           </div>
+        </div>
+
+        <div id="config-tab-reasons" class="config-tab-panel hidden">
           <div class="panel">
-            <h3>Hospital sites</h3>
-            <p class="muted tiny">Rename any hospital/unit here — saved when you click Save.</p>
-            <div class="table-card"><table><thead><tr><th>Name</th><th></th></tr></thead><tbody id="site-list-body"></tbody></table></div>
+            <h3>Suspension reasons</h3>
+            <p class="muted tiny">Fully editable — the dropdown always lists these alphabetically. Only "Other" is fixed in the app itself (it's what triggers the free-text box); it can't be removed.</p>
+            <form id="reason-form" class="filters" style="margin-bottom:12px"><input id="reason-name" placeholder="New reason" required /><button class="btn secondary" type="submit">Add reason</button></form>
+            <div class="table-card"><table><thead><tr><th>Reason</th><th></th></tr></thead><tbody id="reason-body"></tbody></table></div>
           </div>
+
+          <div class="panel" style="margin-top:16px">
+            <h3>Correction reasons</h3>
+            <p class="muted tiny">Shown when a pharmacist sends a prescription back for correction from Awaiting final check, instead of marking it Checked.</p>
+            <form id="correction-reason-form" class="filters" style="margin-bottom:12px"><input id="correction-reason-name" placeholder="New reason" required /><button class="btn secondary" type="submit">Add reason</button></form>
+            <div class="table-card"><table><thead><tr><th>Reason</th><th></th></tr></thead><tbody id="correction-reason-body"></tbody></table></div>
+          </div>
+        </div>
+
+        <div id="config-tab-pressure" class="config-tab-panel hidden">
           <div class="panel">
-            <h3>Wards</h3>
-            <p class="muted tiny">Rename any ward here — saved when you click Save.</p>
-            <div class="table-card"><table><thead><tr><th>Hospital</th><th>Ward</th><th>Status</th><th></th></tr></thead><tbody id="ward-list-body"></tbody></table></div>
+            <h3>Pressure thresholds — superuser only</h3>
+            <p class="muted tiny">How many items waiting at a stage counts as amber or red, shown on the live queue as a pressure indicator so staff can see where help is needed, not just "we're busy". Counts active (non-suspended) items only.</p>
+            <div class="table-card"><table><thead><tr><th>Stage</th><th>Amber at</th><th>Red at</th><th></th></tr></thead><tbody id="pressure-body"></tbody></table></div>
           </div>
         </div>
 
-        <div class="panel" style="margin-top:16px">
-          <h3>Dispensary ↔ hospital coverage</h3>
-          <p class="muted tiny">Tick every hospital a dispensary serves — saved immediately per tick. Coverage is by hospital, not by individual ward: ticking a hospital serves every ward under it automatically, including ones added later.</p>
-          <div class="table-card" id="disp-sites-wrap"><table id="disp-sites-table"><thead><tr><th>Dispensary</th></tr></thead><tbody id="disp-sites-body"></tbody></table></div>
-        </div>
-
-        <div class="panel" style="margin-top:16px">
-          <h3>Import sites &amp; wards from Excel</h3>
-          <p class="muted tiny">Two columns: <strong>Site</strong> (hospital name) and <strong>Ward</strong>. One row per ward. A site with no wards can appear once with the ward column blank. Existing sites/wards with matching names are left alone.</p>
-          <div class="filters" style="margin:10px 0">
-            <input id="import-file" type="file" accept=".xlsx,.xls,.csv" />
-            <button id="import-template-btn" class="btn ghost" type="button">Download template</button>
-          </div>
-          <div id="import-drop" class="import-drop">Drop a spreadsheet here, or use the file picker above</div>
-          <div id="import-preview" class="import-preview hidden"></div>
-          <div id="import-actions" class="filters hidden" style="margin-top:10px">
-            <button id="import-commit-btn" class="btn primary" type="button">Import rows</button>
-            <span id="import-summary" class="muted tiny"></span>
-          </div>
-        </div>
-
-        <div class="panel" style="margin-top:16px">
-          <h3>Prescription types</h3>
-          <p class="muted tiny">Not a fixed list — create, retarget or retire types here. "Pre-screened" types skip straight to Awaiting Labelling and Assembly when booked in; anything else enters at Awaiting Screening first. Each type carries its own turnaround target (one KPI per type, in hours and minutes) rather than a per-line rule.</p>
-          <form id="ptype-form" class="form-grid" style="margin-bottom:14px">
-            <label>Name<input id="ptype-name" required /></label>
-            <label class="check-label"><input id="ptype-prescreened" type="checkbox" /> Pre-screened (skips Awaiting Screening)</label>
-            <label>Turns amber after<span class="filters"><input type="number" min="0" id="ptype-amber-h" placeholder="h" style="width:56px">h <input type="number" min="0" max="59" id="ptype-amber-m" placeholder="m" style="width:56px">m</span></label>
-            <label>Turns red after<span class="filters"><input type="number" min="0" id="ptype-red-h" placeholder="h" style="width:56px">h <input type="number" min="0" max="59" id="ptype-red-m" placeholder="m" style="width:56px">m</span></label>
-            <div class="span-2"><button class="btn primary" type="submit">Add prescription type</button></div>
-          </form>
-          <div class="table-card"><table><thead><tr><th>Type</th><th>Pre-screened?</th><th>Turns amber after</th><th>Turns red after</th><th>Default</th><th></th></tr></thead><tbody id="ptype-body"></tbody></table></div>
-        </div>
-
-        <div class="panel" style="margin-top:16px">
-          <h3>Suspension reasons</h3>
-          <p class="muted tiny">Fully editable — the dropdown always lists these alphabetically. Only "Other" is fixed in the app itself (it's what triggers the free-text box); it can't be removed.</p>
-          <form id="reason-form" class="filters" style="margin-bottom:12px"><input id="reason-name" placeholder="New reason" required /><button class="btn secondary" type="submit">Add reason</button></form>
-          <div class="table-card"><table><thead><tr><th>Reason</th><th></th></tr></thead><tbody id="reason-body"></tbody></table></div>
-        </div>
-
-        <div class="panel" style="margin-top:16px">
-          <h3>Feature toggles</h3>
-          <label class="check-label"><input id="setting-mark-collected" type="checkbox" /> Enable "Mark collected / dispatched" step</label>
-          <p class="muted tiny">Switch off if your workflow ends at Checked and doesn't track a separate collection/dispatch step.</p>
-        </div>
-
-        <div id="danger-zone" class="panel danger-zone hidden" style="margin-top:16px">
-          <h3>Danger zone — superuser only</h3>
-          <p class="muted tiny">Wipes every prescription, its full history, and the audit log. Sites, dispensaries, wards, prescription types, suspension reasons and user accounts are <strong>not</strong> touched. For pre-go-live testing only — there is no undo, and this contradicts "nothing is ever deleted" everywhere else in this app on purpose.</p>
-          <button id="clear-data-toggle-btn" class="btn danger" type="button">Clear all prescription data and logs…</button>
-          <div id="clear-data-confirm" class="filters hidden" style="margin-top:10px">
-            <input id="clear-data-phrase" placeholder='Type CLEAR ALL DATA to confirm' />
-            <button id="clear-data-confirm-btn" class="btn danger" type="button">Confirm — wipe everything</button>
-            <button id="clear-data-cancel-btn" class="btn ghost" type="button">Cancel</button>
+        <div id="config-tab-danger" class="config-tab-panel hidden">
+          <div id="danger-zone" class="panel danger-zone hidden">
+            <h3>Danger zone — superuser only</h3>
+            <p class="muted tiny">Wipes every prescription, its full history, and the audit log. Sites, dispensaries, wards, prescription types, suspension reasons and user accounts are <strong>not</strong> touched. For pre-go-live testing only — there is no undo, and this contradicts "nothing is ever deleted" everywhere else in this app on purpose.</p>
+            <button id="clear-data-toggle-btn" class="btn danger" type="button">Clear all prescription data and logs…</button>
+            <div id="clear-data-confirm" class="filters hidden" style="margin-top:10px">
+              <input id="clear-data-phrase" placeholder='Type CLEAR ALL DATA to confirm' />
+              <button id="clear-data-confirm-btn" class="btn danger" type="button">Confirm — wipe everything</button>
+              <button id="clear-data-cancel-btn" class="btn ghost" type="button">Cancel</button>
+            </div>
           </div>
         </div>
       </section>
@@ -225,11 +264,17 @@
         </div>
       </div>
       <div id="suspend-panel" class="panel compact hidden"><h3>Suspend prescription</h3><div class="search-row"><select id="suspend-reason"></select><input id="suspend-note" placeholder="Note (required if 'Other')" /><button id="suspend-btn" class="btn danger">Suspend</button></div></div>
+      <div id="correction-send-panel" class="panel compact hidden"><h3>Send back for correction</h3><div class="search-row"><select id="correction-send-reason"></select><input id="correction-send-note" placeholder="Note (optional)" /><button id="correction-send-btn" class="btn danger">Send back</button></div></div>
       <details class="rx-more">
         <summary>More options</summary>
-        <div id="correction-panel" class="panel compact admin-correction hidden">
-          <h3>Correct hospital number</h3>
-          <div class="search-row"><input id="correct-hn" placeholder="New hospital number" /><input id="correct-reason" placeholder="Reason for correction" /><button id="correct-btn" class="btn secondary">Correct</button></div>
+        <button id="destination-toggle-btn" class="btn ghost hidden" type="button">Change ward / hospital destination…</button>
+        <div id="destination-panel" class="panel compact hidden">
+          <h3>Change ward / hospital destination</h3>
+          <div class="form-grid">
+            <label>Ward<select id="destination-ward"><option value="">Select a ward…</option></select></label>
+            <label>Hospital / unit<select id="destination-site" required><option value="" disabled selected>Select hospital/unit…</option></select></label>
+            <div class="span-2"><button id="destination-save-btn" class="btn secondary" type="button">Save new destination</button></div>
+          </div>
         </div>
         <button id="cancel-toggle-btn" class="btn ghost hidden" type="button">Cancel prescription…</button>
         <div id="cancel-panel" class="panel compact hidden">
