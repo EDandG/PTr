@@ -560,6 +560,8 @@ function applyQueueFilter(rows){
     out = out.filter(r=>r.prescription_type_category_tto);
   } else if(state.queueFilter.category==='inpatient'){
     out = out.filter(r=>r.prescription_type_category_inpatient);
+  } else if(state.queueFilter.category==='outpatient'){
+    out = out.filter(r=>r.prescription_type_category_outpatient);
   }
   return out;
 }
@@ -592,7 +594,7 @@ function renderActiveFilterBar(){
   if(state.queueFilter.siteId){ const s=state.sites.find(x=>x.id===state.queueFilter.siteId); parts.push(`Site: ${s?s.name:'—'}`); }
   const term=($('queue-search')?.value||'').trim();
   if(term){ parts.push(`Search: "${term}"`); }
-  else if(state.queueFilter.category){ parts.push(`Category: ${state.queueFilter.category==='tto'?'TTO':'Inpatient'}`); }
+  else if(state.queueFilter.category){ parts.push(`Category: ${({tto:'TTO',inpatient:'Inpatient',outpatient:'Outpatient'})[state.queueFilter.category]||state.queueFilter.category}`); }
   document.querySelectorAll('[data-filter-status]').forEach(b=>{
     const key=b.dataset.filterStatus;
     const isActive = (key==='overtarget' && state.queueFilter.statusKind==='overtarget') || (state.queueFilter.statusKind==='state' && state.queueFilter.statusValue===key);
@@ -639,6 +641,7 @@ function renderTilesByType(displayRows){
   const categories = [
     {key:'inpatient', label:'Inpatient', match:t=>t?.category_inpatient},
     {key:'tto', label:'TTO', match:t=>t?.category_tto},
+    {key:'outpatient', label:'Outpatient', match:t=>t?.category_outpatient},
   ];
   let html='';
   for(const cat of categories){
@@ -650,7 +653,7 @@ function renderTilesByType(displayRows){
     if(!lines) continue;
     html += `<div class="tiles-category-block"><strong>${esc(cat.label)}</strong>${lines}</div>`;
   }
-  $('tiles-by-type').innerHTML = html || '<p class="muted tiny">No active Inpatient or TTO items right now.</p>';
+  $('tiles-by-type').innerHTML = html || '<p class="muted tiny">No active Inpatient, TTO or Outpatient items right now.</p>';
   document.querySelectorAll('[data-jump-stage]').forEach(b=>b.addEventListener('click', ()=>{
     document.querySelector('[data-view="dashboard"]').click();
     $('tiles-flyout').classList.remove('open');
@@ -1358,6 +1361,7 @@ function renderPrescriptionTypes(){
       <td style="text-align:center"><input type="checkbox" class="pt-prescreened" ${t.is_prescreened?'checked':''}></td>
       <td style="text-align:center"><input type="checkbox" class="pt-tto" ${t.category_tto?'checked':''}></td>
       <td style="text-align:center"><input type="checkbox" class="pt-inpatient" ${t.category_inpatient?'checked':''}></td>
+      <td style="text-align:center"><input type="checkbox" class="pt-outpatient" ${t.category_outpatient?'checked':''}></td>
       <td style="text-align:center"><input type="checkbox" class="pt-collected" ${t.collected_enabled?'checked':''}></td>
       <td style="text-align:center"><input type="checkbox" class="pt-dispatched" ${t.dispatched_enabled?'checked':''}></td>
       <td class="filters"><input type="number" min="0" class="pt-amber-h" value="${a.h}" style="width:56px">h <input type="number" min="0" max="59" class="pt-amber-m" value="${a.m}" style="width:56px">m</td>
@@ -1365,7 +1369,7 @@ function renderPrescriptionTypes(){
       <td>${t.is_default?'<span class="perm-badge super">Default</span>':`<button class="btn ghost" data-set-default-ptype="${t.id}">Make default</button>`}</td>
       <td class="filters"><button class="btn secondary" data-save-ptype="${t.id}">Save</button><button class="btn ghost" data-deactivate-ptype="${t.id}">Deactivate</button></td>
     </tr>`;
-  }).join('') || '<tr><td colspan="10" class="muted">No prescription types yet — add one above.</td></tr>';
+  }).join('') || '<tr><td colspan="11" class="muted">No prescription types yet — add one above.</td></tr>';
   document.querySelectorAll('[data-save-ptype]').forEach(b=>b.addEventListener('click',()=>savePrescriptionType(b.dataset.savePtype)));
   document.querySelectorAll('[data-deactivate-ptype]').forEach(b=>b.addEventListener('click',()=>deactivatePrescriptionType(b.dataset.deactivatePtype)));
   document.querySelectorAll('[data-set-default-ptype]').forEach(b=>b.addEventListener('click',()=>setDefaultPrescriptionType(b.dataset.setDefaultPtype)));
@@ -1376,6 +1380,7 @@ $('ptype-form').addEventListener('submit', async e=>{
   const isPrescreened=$('ptype-prescreened').checked;
   const categoryTto=$('ptype-tto').checked;
   const categoryInpatient=$('ptype-inpatient').checked;
+  const categoryOutpatient=$('ptype-outpatient').checked;
   const collectedEnabled=$('ptype-collected').checked;
   const dispatchedEnabled=$('ptype-dispatched').checked;
   const amber=(Number($('ptype-amber-h').value)||0)*60+(Number($('ptype-amber-m').value)||0);
@@ -1384,7 +1389,7 @@ $('ptype-form').addEventListener('submit', async e=>{
   if(amber<=0||red<=0){ toast('Enter a turnaround time greater than zero for both amber and red',true); return; }
   if(red<=amber){ toast('Red must be a longer turnaround than amber',true); return; }
   let code=slugify(name);
-  const payload={code, name, is_prescreened:isPrescreened, category_tto:categoryTto, category_inpatient:categoryInpatient, collected_enabled:collectedEnabled, dispatched_enabled:dispatchedEnabled, amber_minutes:amber, red_minutes:red, created_by:state.profile.id};
+  const payload={code, name, is_prescreened:isPrescreened, category_tto:categoryTto, category_inpatient:categoryInpatient, category_outpatient:categoryOutpatient, collected_enabled:collectedEnabled, dispatched_enabled:dispatchedEnabled, amber_minutes:amber, red_minutes:red, created_by:state.profile.id};
   let {error}=await sb.from('prescription_types').insert(payload);
   if(error && /duplicate key/i.test(error.message)){
     code = `${code}_${Math.floor(Math.random()*900+100)}`;
@@ -1399,6 +1404,7 @@ async function savePrescriptionType(id){
   const isPrescreened=row.querySelector('.pt-prescreened').checked;
   const categoryTto=row.querySelector('.pt-tto').checked;
   const categoryInpatient=row.querySelector('.pt-inpatient').checked;
+  const categoryOutpatient=row.querySelector('.pt-outpatient').checked;
   const collectedEnabled=row.querySelector('.pt-collected').checked;
   const dispatchedEnabled=row.querySelector('.pt-dispatched').checked;
   const ah=Number(row.querySelector('.pt-amber-h').value)||0, am=Number(row.querySelector('.pt-amber-m').value)||0;
@@ -1407,7 +1413,7 @@ async function savePrescriptionType(id){
   if(!name){ toast('Name required',true); return; }
   if(amber<=0||red<=0){ toast('Enter a turnaround time greater than zero for both amber and red',true); return; }
   if(red<=amber){ toast('Red must be a longer turnaround than amber',true); return; }
-  const {error}=await sb.from('prescription_types').update({name, is_prescreened:isPrescreened, category_tto:categoryTto, category_inpatient:categoryInpatient, collected_enabled:collectedEnabled, dispatched_enabled:dispatchedEnabled, amber_minutes:amber, red_minutes:red}).eq('id',id);
+  const {error}=await sb.from('prescription_types').update({name, is_prescreened:isPrescreened, category_tto:categoryTto, category_inpatient:categoryInpatient, category_outpatient:categoryOutpatient, collected_enabled:collectedEnabled, dispatched_enabled:dispatchedEnabled, amber_minutes:amber, red_minutes:red}).eq('id',id);
   if(error){ toast(error.message,true); return; }
   toast('Prescription type saved'); await loadReference(); await loadQueue();
 }

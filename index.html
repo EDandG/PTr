@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <meta name="robots" content="noindex,nofollow" />
   <title>Prescription Tracker by ED&amp;G&trade;</title>
-  <link rel="stylesheet" href="css/app.css?v=2.31" />
+  <link rel="stylesheet" href="css/app.css?v=2.34" />
   <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; connect-src 'self' https://*.supabase.co wss://*.supabase.co; img-src 'self' data:; frame-ancestors 'none'; base-uri 'self'; form-action 'self'; object-src 'none'">
   <script src="./vendor/supabase-js.min.js"></script>
   <script src="./vendor/xlsx.full.min.js"></script>
@@ -87,6 +87,7 @@
             <button type="button" class="rx-tab active" data-category="">All types</button>
             <button type="button" class="rx-tab" data-category="inpatient">Inpatient</button>
             <button type="button" class="rx-tab" data-category="tto">TTO</button>
+            <button type="button" class="rx-tab" data-category="outpatient">Outpatient</button>
           </div>
           <input id="queue-search" placeholder="Search by hospital number" />
         </div>
@@ -224,6 +225,7 @@
               <label class="check-label"><input id="ptype-prescreened" type="checkbox" /> Pre-screened (skips Awaiting Screening)</label>
               <label class="check-label"><input id="ptype-tto" type="checkbox" /> TTO category</label>
               <label class="check-label"><input id="ptype-inpatient" type="checkbox" /> Inpatient category</label>
+              <label class="check-label"><input id="ptype-outpatient" type="checkbox" /> Outpatient category</label>
               <label class="check-label"><input id="ptype-collected" type="checkbox" checked /> Enable "Mark collected" step</label>
               <label class="check-label"><input id="ptype-dispatched" type="checkbox" /> Enable "Mark dispatched" step</label>
               <label>Turns amber after<span class="filters"><input type="number" min="0" id="ptype-amber-h" placeholder="h" style="width:56px">h <input type="number" min="0" max="59" id="ptype-amber-m" placeholder="m" style="width:56px">m</span></label>
@@ -234,14 +236,14 @@
               <thead>
                 <tr>
                   <th rowspan="2">Type</th>
-                  <th colspan="3" class="group-col">Category &amp; routing</th>
+                  <th colspan="4" class="group-col">Category &amp; routing</th>
                   <th colspan="2" class="group-col">Completion step</th>
                   <th colspan="2" class="group-col">Turnaround target</th>
                   <th rowspan="2">Default</th>
                   <th rowspan="2"></th>
                 </tr>
                 <tr>
-                  <th>Pre-screened</th><th>TTO</th><th>Inpatient</th>
+                  <th>Pre-screened</th><th>TTO</th><th>Inpatient</th><th>Outpatient</th>
                   <th>Collected</th><th>Dispatched</th>
                   <th>Amber after</th><th>Red after</th>
                 </tr>
@@ -402,6 +404,6 @@
     </form>
   </dialog>
 
-  <script src="js/app.js?v=2.31"></script>
+  <script src="js/app.js?v=2.34"></script>
 </body>
 </html>
