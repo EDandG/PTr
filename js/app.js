@@ -1,0 +1,1793 @@
+/* Prescription Tracker v1.8 - static GitHub Pages client */
+const cfg = window.APP_CONFIG || {};
+const notConfigured = !cfg.SUPABASE_URL || cfg.SUPABASE_URL.includes('YOUR_PROJECT') || !cfg.SUPABASE_PUBLISHABLE_KEY || cfg.SUPABASE_PUBLISHABLE_KEY.includes('YOUR_');
+const sb = notConfigured ? null : window.supabase.createClient(cfg.SUPABASE_URL, cfg.SUPABASE_PUBLISHABLE_KEY, {
+  auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: false }
+});
+
+const ROLE_LABELS = { admin:'Admin', pharmacist:'Pharmacist', technician:'Pharmacy Technician', assistant:'Pharmacy Assistant', governance:'Governance' };
+// Crisp inline SVG icons (Material-style paths) - replaces plain unicode
+// glyphs (▶ ✓ ❙❙ ×), which render inconsistently across fonts/platforms
+// and look unpolished at button size.
+const ICONS = {
+  play: '<svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor"><path d="M8 5v14l11-7z"/></svg>',
+  check: '<svg viewBox="0 0 24 24" width="24" height="24" fill="currentColor"><path d="M9 16.17 4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z"/></svg>',
+  checkSmall: '<svg viewBox="0 0 24 24" width="13" height="13" fill="currentColor"><path d="M9 16.17 4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z"/></svg>',
+  pause: '<svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor"><path d="M6 5h4v14H6zm8 0h4v14h-4z"/></svg>',
+  undo: '<svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor"><path d="M12.5 8c-2.65 0-5.05.99-6.9 2.6L2 7v9h9l-3.62-3.62c1.39-1.16 3.16-1.88 5.12-1.88 3.54 0 6.55 2.31 7.6 5.5l2.37-.78C21.08 11.03 17.15 8 12.5 8z"/></svg>',
+};
+
+// Tickable clinical permissions - any account with can_manage_users may grant these.
+// Hospital-number correction is NOT here any more: it now rides on
+// perm_progress_pharmacist (whoever can mark a prescription "Checked").
+const PERM_GROUPS = [
+  { label:'General workflow', perms: [
+    {key:'perm_book_in', label:'Booking in a prescription', hint:''},
+    {key:'perm_progress_standard', label:'Progress ordinary workflow stages', hint:'Booking in through label production - up to, but not including, final check'},
+    {key:'perm_suspend', label:'Suspend prescriptions', hint:"Includes choosing a suspension reason; 'Other' needs a note"},
+    {key:'perm_resume', label:'Resume prescriptions', hint:'Bring a suspended prescription back to active'},
+    {key:'perm_view_all_dispensaries', label:'View all dispensaries', hint:'Not limited to allocated dispensaries'},
+  ]},
+  { label:'Final check', perms: [
+    {key:'perm_progress_pharmacist', label:"Change status to 'Checked'", hint:'Pharmacist sign-off — the final check stage. Also governs sending a prescription back for correction, kept as one permission rather than two.'},
+  ]},
+];
+const RP_PERM = {key:'perm_responsible_pharmacist', label:'Responsible Pharmacist eligible', hint:'Pharmacist role only — requires a GPhC number'};
+const TICKABLE_PERMS = PERM_GROUPS.flatMap(g=>g.perms).concat([RP_PERM]);
+const AUTO_PERMS = [
+  {key:'perm_manage_users', label:'Manage users'},
+  {key:'perm_manage_config', label:'Configure sites/wards, incl. import'},
+  {key:'perm_view_audit', label:'View governance audit log'},
+];
+const ALL_PERMS = TICKABLE_PERMS.concat(AUTO_PERMS);
+
+const state = {
+  session:null, profile:null, dispensaries:[], dispensarySites:[], sites:[], wards:[], stages:[],
+  suspensionReasons:[], correctionReasons:[], prescriptionFlags:[], prescriptionTypes:[], currentRx:null, realtime:null, users:[], rpSessions:[],
+  managingUserId:null, importRows:[], queueRows:[], settings:{}, pressure:[], queueFilter:{statusKind:null,statusValue:null,siteId:null,category:null}
+};
+const $ = (id) => document.getElementById(id);
+const esc = (v='') => String(v).replace(/[&<>'"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[c]));
+const fmt = (d) => d ? new Intl.DateTimeFormat('en-GB',{dateStyle:'short',timeStyle:'short'}).format(new Date(d)) : '—';
+const can = (permKey) => !!(state.profile?.is_superuser || state.profile?.[permKey]);
+function toast(msg, error=false){ const t=$('toast'); t.textContent=msg; t.className='toast'+(error?' error':''); setTimeout(()=>t.classList.add('hidden'),3500); }
+// Disables a button for the duration of an async action so a rapid
+// double-click/double-tap can't fire the same request twice. The server
+// side is already safe either way (every mutation locks its row and
+// re-checks state before acting), so this is about a clean single
+// response rather than data safety - but a friendly result beats a
+// confusing extra error toast from a click that arrived a moment too late.
+async function withButtonGuard(btn, fn){
+  if(!btn || btn.disabled) return;
+  btn.disabled=true;
+  try{ await fn(); } finally { btn.disabled=false; }
+}
+function usernameEmail(username){ return `${String(username).toLowerCase().trim()}@${cfg.USERNAME_DOMAIN || 'users.local'}`; }
+function hm(mins){ return mins==null ? {h:'',m:''} : {h:Math.floor(mins/60), m:mins%60}; }
+function slugify(name){
+  const base = String(name).toLowerCase().trim().replace(/[^a-z0-9]+/g,'_').replace(/^_+|_+$/g,'') || 'item';
+  return base;
+}
+
+async function init(){
+  if(notConfigured){ $('login-error').textContent='Configure frontend/config.js with your Supabase URL and publishable key.'; return; }
+  const {data:{session}}=await sb.auth.getSession();
+  if(session) await enterApp(session);
+  sb.auth.onAuthStateChange(async (_event, session)=>{ if(!session) showLogin(); });
+}
+
+$('login-form').addEventListener('submit', async e=>{
+  e.preventDefault(); $('login-error').textContent='';
+  const {data,error}=await sb.auth.signInWithPassword({email:usernameEmail($('login-username').value),password:$('login-password').value});
+  if(error){ $('login-error').textContent='Sign-in failed. Check your username and password.'; return; }
+  await enterApp(data.session);
+});
+$('logout-btn').addEventListener('click',()=>sb.auth.signOut());
+
+// Automatic sign-out after a period of no user activity - important on
+// shared pharmacy workstations, since the app otherwise stays signed in
+// indefinitely (persistSession: true above) and the screens here show
+// hospital numbers and patient initials. Any interaction resets the
+// clock; a background check every 30s forces a real sign-out (not just a
+// visual lock) once the threshold is passed, so a walked-away, logged-in
+// session can't be left showing patient data.
+const INACTIVITY_TIMEOUT_MINUTES = 20;
+let lastActivityAt = Date.now();
+['mousemove','mousedown','keydown','touchstart','scroll','click'].forEach(evt=>
+  document.addEventListener(evt, ()=>{ lastActivityAt = Date.now(); }, {passive:true})
+);
+setInterval(async ()=>{
+  if(!state.profile) return;
+  if(Date.now() - lastActivityAt < INACTIVITY_TIMEOUT_MINUTES*60*1000) return;
+  await sb.auth.signOut();
+  $('login-error').textContent = `Signed out after ${INACTIVITY_TIMEOUT_MINUTES} minutes of inactivity — please sign in again.`;
+}, 30000);
+
+// Re-checks the signed-in account's own profile row periodically, so an
+// account suspended (or password-reset) by an admin stops working within
+// about a minute rather than lingering on a stale screen until its
+// session happens to expire.
+//
+// The database was already safe without this: every permission helper
+// checks `active` and `must_change_password`, so a suspended account's
+// next action fails regardless. What this fixes is the window where
+// someone keeps LOOKING at a working app - which matters when the reason
+// for suspending them was urgent. Cheap check: one indexed row read,
+// and profiles_read allows `id = auth.uid()` unconditionally, so it
+// still works even once every permission has been revoked.
+async function checkAccountStillValid(){
+  if(!state.profile || !sb) return;
+  const {data,error} = await sb.from('profiles').select('active,must_change_password').eq('id',state.profile.id).maybeSingle();
+  if(error || !data) return; // transient network/RLS issue - don't sign anyone out on a blip
+  if(!data.active){
+    await sb.auth.signOut();
+    $('login-error').textContent = 'Your account has been suspended. Please contact your administrator.';
+    return;
+  }
+  if(data.must_change_password){
+    state.profile = null;
+    showForcePasswordChange();
+    $('force-password-error').textContent = 'Your password was reset by an administrator. Please set a new one.';
+  }
+}
+setInterval(checkAccountStillValid, 60000);
+// Also check the moment a tab regains focus - covers the common case of
+// someone returning to a tab that has been sitting in the background.
+window.addEventListener('focus', checkAccountStillValid);
+
+let queueTickTimer=null;
+function showLogin(){ state.session=null; state.profile=null; if(queueTickTimer){ clearInterval(queueTickTimer); queueTickTimer=null; } $('app').classList.add('hidden'); $('force-password-screen').classList.add('hidden'); $('login-screen').classList.remove('hidden'); }
+// Shown instead of the app when the account is on a temporary password.
+// This screen is a courtesy, not the enforcement: every permission helper
+// in the database returns false while must_change_password is set, so an
+// account in this state can read its own profile row and nothing else,
+// even if someone skipped this screen from the console.
+function showForcePasswordChange(){
+  $('app').classList.add('hidden');
+  $('login-screen').classList.add('hidden');
+  $('force-password-screen').classList.remove('hidden');
+  $('force-password-error').textContent='';
+  $('force-password-new').value=''; $('force-password-confirm').value='';
+}
+$('force-password-signout').addEventListener('click', async()=>{ await sb.auth.signOut(); });
+$('force-password-form').addEventListener('submit', async e=>{
+  e.preventDefault();
+  const pw=$('force-password-new').value, confirm=$('force-password-confirm').value;
+  $('force-password-error').textContent='';
+  if(pw.length<12){ $('force-password-error').textContent='Password must be at least 12 characters.'; return; }
+  if(pw!==confirm){ $('force-password-error').textContent='The two passwords do not match.'; return; }
+  const btn=e.target.querySelector('button[type=submit]');
+  btn.disabled=true;
+  try{
+    const {data,error}=await sb.functions.invoke('set-own-password',{body:{new_password:pw}});
+    // On a non-2xx, supabase-js reports a generic "non-2xx status code"
+    // and leaves data null - the real reason ("password too short",
+    // "choose a different password") is in the response body, which
+    // matters a lot on this screen, so read it out of error.context.
+    let serverError = data?.error || null;
+    if(error && !serverError){
+      try { serverError = (await error.context?.json())?.error; } catch { /* fall through */ }
+      serverError = serverError || 'Could not set your password. Please try again.';
+    }
+    if(serverError){ $('force-password-error').textContent=serverError; return; }
+    toast('Password set — signing you in');
+    // Re-read the session and re-enter properly; the profile's permissions
+    // only come alive once the flag is cleared server-side.
+    const {data:{session:fresh}}=await sb.auth.getSession();
+    if(fresh) await enterApp(fresh); else showLogin();
+  } catch(err){
+    $('force-password-error').textContent='Could not reach the server. Please try again.';
+  } finally {
+    btn.disabled=false;
+  }
+});
+async function enterApp(session){
+  state.session=session;
+  const {data:profile,error}=await sb.from('profiles').select('*').eq('id',session.user.id).single();
+  if(error || !profile?.active){ await sb.auth.signOut(); $('login-error').textContent='Account is inactive or not configured.'; return; }
+  if(profile.must_change_password){ state.profile=null; showForcePasswordChange(); return; }
+  state.profile=profile; $('login-screen').classList.add('hidden'); $('force-password-screen').classList.add('hidden'); $('app').classList.remove('hidden');
+  $('current-user').textContent=profile.display_name;
+  $('current-role').textContent=profile.is_superuser?'Superuser':(ROLE_LABELS[profile.role]||profile.role);
+  if(can('perm_manage_users')) document.querySelectorAll('.perm-users').forEach(x=>x.classList.remove('hidden'));
+  if(can('perm_manage_config')) document.querySelectorAll('.perm-config').forEach(x=>x.classList.remove('hidden'));
+  if(can('perm_view_audit')) document.querySelectorAll('.perm-audit').forEach(x=>x.classList.remove('hidden'));
+  initPermGrids();
+  await loadReference(); await loadQueue(); await loadRP(); await loadPressure(); subscribeRealtime();
+  setInterval(()=>{ if(state.profile) loadPressure(); }, 60000);
+}
+
+/* ---------- Tiles flyout (tap fallback for touch devices; hover handles desktop via CSS) ---------- */
+$('tiles-trigger').addEventListener('click', ()=>$('tiles-flyout').classList.toggle('open'));
+document.addEventListener('click', (e)=>{
+  if(!$('tiles-flyout').classList.contains('open')) return;
+  if($('tiles-flyout').contains(e.target) || e.target===$('tiles-trigger')) return;
+  $('tiles-flyout').classList.remove('open');
+});
+
+/* ---------- Searchable dropdowns ---------- */
+// Wraps a native <select> with a type-to-filter text input. Reads the
+// select's live option list each time it opens, so any code elsewhere that
+// rebuilds the select's innerHTML (fillSelects, filters, etc.) just works
+// without needing to notify this wrapper separately.
+function makeSearchable(selectId, placeholder){
+  const select=document.getElementById(selectId);
+  if(!select || select.dataset.searchableInit) return;
+  select.dataset.searchableInit='1';
+  select.classList.add('searchable-native');
+  const wrap=document.createElement('div'); wrap.className='searchable';
+  const input=document.createElement('input'); input.type='text'; input.className='searchable-input'; input.autocomplete='off';
+  input.placeholder=placeholder||'Search…';
+  const panel=document.createElement('div'); panel.className='searchable-panel hidden';
+  select.parentNode.insertBefore(wrap, select);
+  wrap.appendChild(input); wrap.appendChild(panel); wrap.appendChild(select);
+
+  function labelFor(value){ const o=[...select.options].find(o=>o.value===value); return o?o.textContent:''; }
+  function sync(){ input.value=labelFor(select.value); input.disabled=select.disabled; }
+  function open(filterText){
+    const f=(filterText||'').trim().toLowerCase();
+    const opts=[...select.options].filter(o=>!o.disabled).filter(o=>!f||o.textContent.toLowerCase().includes(f));
+    panel.innerHTML = opts.length ? opts.map(o=>`<div class="searchable-option${o.value===select.value?' active':''}" data-value="${esc(o.value)}">${esc(o.textContent)}</div>`).join('') : '<div class="searchable-empty">No matches</div>';
+    panel.classList.remove('hidden');
+    panel.querySelectorAll('.searchable-option').forEach(el=>el.addEventListener('mousedown', e=>{
+      e.preventDefault();
+      select.value=el.dataset.value; sync(); panel.classList.add('hidden');
+      select.dispatchEvent(new Event('change',{bubbles:true}));
+    }));
+  }
+  input.addEventListener('focus', ()=>{ if(select.disabled) return; input.value=''; open(''); });
+  input.addEventListener('input', ()=>open(input.value));
+  input.addEventListener('blur', ()=>setTimeout(()=>{ panel.classList.add('hidden'); sync(); }, 120));
+  input.addEventListener('keydown', e=>{ if(e.key==='Escape'){ panel.classList.add('hidden'); sync(); input.blur(); } });
+  select.addEventListener('change', sync);
+  select._searchableSync = sync;
+  sync();
+}
+const SEARCHABLE_IDS = ['book-ward','book-site','book-dispensary','dispensary-filter','ward-site','book-type','suspend-reason','destination-ward','destination-site','correction-send-reason'];
+function syncAllSearchables(){ SEARCHABLE_IDS.forEach(id=>document.getElementById(id)?._searchableSync?.()); }
+SEARCHABLE_IDS.forEach(id=>makeSearchable(id));
+
+/* ---------- Permission grids + role-driven form behaviour ---------- */
+function initPermGrids(){
+  const permHtml=(p,idPrefix)=>`<label class="perm-item" data-perm-key="${p.key}"><input type="checkbox" id="${idPrefix}-${p.key}"><span>${esc(p.label)}${p.hint?`<small>${esc(p.hint)}</small>`:''}</span></label>`;
+  const groupsHtml=(idPrefix)=>PERM_GROUPS.concat([{label:'Responsible Pharmacist', perms:[RP_PERM]}])
+    .map(g=>`<div class="perm-group"><h4>${esc(g.label)}</h4>${g.perms.map(p=>permHtml(p,idPrefix)).join('')}</div>`).join('');
+  $('user-perms-clinical').innerHTML = groupsHtml('up');
+  $('mu-perms-clinical').innerHTML = groupsHtml('mu');
+  $('user-role').addEventListener('change', ()=>syncRoleDependentUI('up'));
+  $('mu-role').addEventListener('change', ()=>syncRoleDependentUI('mu'));
+  syncRoleDependentUI('up'); syncRoleDependentUI('mu');
+}
+function syncRoleDependentUI(prefix){
+  const roleSel = prefix==='up' ? $('user-role') : $('mu-role');
+  const role = roleSel.value;
+  const gphcInput = prefix==='up' ? $('user-gphc') : $('mu-gphc');
+  const rpBox = document.getElementById(`${prefix}-perm_responsible_pharmacist`);
+  const isPharmacist = role === 'pharmacist';
+  gphcInput.required = isPharmacist;
+  if(rpBox){
+    rpBox.disabled = !isPharmacist;
+    if(!isPharmacist) rpBox.checked = false;
+    rpBox.closest('.perm-item')?.classList.toggle('perm-item-disabled', !isPharmacist);
+  }
+  const notes=[];
+  if(role==='admin') notes.push('Admin accounts automatically get Manage users, Configure sites/wards and View audit — the same access as a superuser, except they can never touch a superuser account or create another one.');
+  if(role==='governance') notes.push('Governance accounts automatically get View audit and can view all dispensaries.');
+  if(role==='pharmacist') notes.push('Pharmacist accounts require a GPhC number. Only Pharmacist accounts can be ticked Responsible Pharmacist eligible, and only Pharmacist-permission holders can correct a hospital number.');
+  const noteEl = prefix==='up' ? $('user-role-note') : $('mu-role-note');
+  noteEl.textContent = notes.join(' ');
+}
+function collectPerms(idPrefix){ const perms={}; TICKABLE_PERMS.forEach(p=>{ const el=document.getElementById(`${idPrefix}-${p.key}`); if(el) perms[p.key]=el.checked; }); return perms; }
+
+async function loadReference(){
+  const [d,ds,s,w,st,sr,cr,pf,pt,as] = await Promise.all([
+    sb.from('dispensaries').select('*').eq('active',true).order('name'),
+    sb.from('dispensary_sites').select('*'),
+    sb.from('sites').select('*').eq('active',true).order('name'),
+    sb.from('wards').select('*').order('name'),
+    sb.from('workflow_stages').select('*').eq('active',true).order('sequence'),
+    sb.from('suspension_reasons').select('*').eq('active',true).order('name'),
+    sb.from('correction_reasons').select('*').eq('active',true).order('name'),
+    sb.from('prescription_flags').select('*').eq('active',true).order('sort_order'),
+    sb.from('prescription_types').select('*').eq('active',true).order('sort_order'),
+    sb.from('app_settings').select('*')
+  ]);
+  state.dispensaries=d.data||[]; state.dispensarySites=ds.data||[]; state.sites=s.data||[]; state.wards=w.data||[];
+  state.stages=st.data||[]; state.suspensionReasons=sr.data||[]; state.correctionReasons=cr.data||[]; state.prescriptionFlags=pf.data||[]; state.prescriptionTypes=pt.data||[];
+  state.settings={}; (as.data||[]).forEach(row=>{ state.settings[row.key]=row.value; });
+  fillSelects();
+  if(can('perm_manage_users')) await loadUsers();
+  if(can('perm_manage_config')){ renderDispensarySites(); renderDispensaryList(); renderSiteList(); renderWardList(); renderPrescriptionTypes(); renderSuspensionReasons(); renderCorrectionReasons(); renderFlagsAdmin(); }
+  $('danger-zone').classList.toggle('hidden', !state.profile.is_superuser);
+  document.querySelector('[data-config-tab="danger"]').classList.toggle('hidden', !state.profile.is_superuser);
+}
+$('clear-data-toggle-btn').addEventListener('click', ()=>$('clear-data-confirm').classList.toggle('hidden'));
+$('clear-data-cancel-btn').addEventListener('click', ()=>{ $('clear-data-confirm').classList.add('hidden'); $('clear-data-phrase').value=''; });
+$('clear-data-confirm-btn').addEventListener('click', async()=>{
+  if($('clear-data-phrase').value.trim()!=='CLEAR ALL DATA'){ toast('Type CLEAR ALL DATA exactly to confirm',true); return; }
+  const {error}=await sb.rpc('clear_all_operational_data');
+  if(error){ toast(error.message,true); return; }
+  $('clear-data-phrase').value=''; $('clear-data-confirm').classList.add('hidden');
+  toast('All prescription data and logs cleared');
+  await loadQueue(); await loadReference();
+});
+function dispensaryLabel(d, withSites){
+  if(!withSites) return d.name;
+  const names = state.dispensarySites.filter(ds=>ds.dispensary_id===d.id).map(ds=>(state.sites.find(s=>s.id===ds.site_id)||{}).name).filter(Boolean);
+  return names.length ? `${d.name} (${names.join(', ')})` : d.name;
+}
+function fillSelects(){
+  // Dispensary is independent of ward/site now - it's the first field on
+  // the booking form, and a dispensary can serve several hospitals, so it
+  // always shows the full list (each option notes which hospitals it
+  // serves) rather than being filtered by whatever's picked below it.
+  const dispOpts=state.dispensaries.map(d=>`<option value="${d.id}">${esc(dispensaryLabel(d,true))}</option>`).join('');
+  $('dispensary-filter').innerHTML='<option value="">All dispensaries</option>'+dispOpts;
+  $('book-dispensary').innerHTML=dispOpts;
+  const siteOpts=state.sites.map(s=>`<option value="${s.id}">${esc(s.name)}</option>`).join('');
+  $('ward-site').innerHTML=siteOpts;
+  $('book-site').innerHTML='<option value="" disabled selected>Select hospital/unit…</option>'+siteOpts;
+  // Ward starts as the full, unfiltered (but active-only - hidden wards
+  // don't show up for booking) list - it's the primary way to book in;
+  // picking one auto-fills the hospital/unit. Only a standalone unit with
+  // no wards defined needs the hospital/unit field used directly.
+  $('book-ward').innerHTML='<option value="">Select a ward…</option>'+state.wards.filter(w=>w.active).map(w=>`<option value="${w.id}">${esc(w.name)}</option>`).join('');
+  $('book-ward').disabled=false;
+  $('suspend-reason').innerHTML=state.suspensionReasons.map(r=>`<option value="${r.id}">${r.emoji?esc(r.emoji)+' ':''}${esc(r.name)}</option>`).join('');
+  $('correction-send-reason').innerHTML=state.correctionReasons.length
+    ? state.correctionReasons.map(r=>`<option value="${r.id}">${r.emoji?esc(r.emoji)+' ':''}${esc(r.name)}</option>`).join('')
+    : '<option value="" disabled selected>No correction reasons yet — add one in Configuration</option>';
+  renderFlagPicker('book-flags', []);
+  syncSuspendOtherRequirement();
+  $('user-dispensaries').innerHTML=state.dispensaries.map(d=>`<label><input type="checkbox" value="${d.id}"> ${esc(d.name)}</label>`).join('');
+  const defaultType = state.prescriptionTypes.find(t=>t.is_default) || state.prescriptionTypes[0];
+  $('book-type').innerHTML = state.prescriptionTypes.length
+    ? state.prescriptionTypes.map(t=>`<option value="${t.id}" ${defaultType&&t.id===defaultType.id?'selected':''}>${esc(t.name)}</option>`).join('')
+    : '<option value="" disabled selected>No prescription types yet — add one in Configuration</option>';
+  syncAllSearchables();
+}
+
+for(const tab of document.querySelectorAll('.tab')) tab.addEventListener('click',async()=>{
+  document.querySelectorAll('.tab').forEach(x=>x.classList.remove('active')); tab.classList.add('active');
+  document.querySelectorAll('.view').forEach(x=>x.classList.remove('active-view')); $(`view-${tab.dataset.view}`).classList.add('active-view');
+  if(tab.dataset.view==='history') await searchHistory();
+  if(tab.dataset.view==='users' && can('perm_manage_users')) await loadUsers();
+  if(tab.dataset.view==='audit' && can('perm_view_audit')) await loadAudit();
+});
+
+/* ---------- Ward / hospital auto-allocation ---------- */
+// Picking a ward is the primary path - it fills in the hospital/unit
+// automatically. The hospital/unit field is there for the minority case:
+// a standalone unit that has no wards defined at all, where there's
+// nothing to pick from the ward list.
+function filterBookWardBySite(siteId){
+  const list = state.wards.filter(w=>w.active && (!siteId||w.site_id===siteId));
+  const wardSel=$('book-ward');
+  if(!siteId){
+    wardSel.innerHTML='<option value="">Select a ward…</option>'+state.wards.filter(w=>w.active).map(w=>`<option value="${w.id}">${esc(w.name)}</option>`).join('');
+    wardSel.disabled=false;
+  } else if(!list.length){
+    wardSel.innerHTML='<option value="">No wards for this hospital/unit — standalone</option>';
+    wardSel.disabled=true;
+  } else {
+    wardSel.disabled=false;
+    wardSel.innerHTML='<option value="" disabled selected>Select a ward…</option>'+list.map(w=>`<option value="${w.id}">${esc(w.name)}</option>`).join('');
+  }
+  syncAllSearchables();
+}
+$('book-ward').addEventListener('change', ()=>{
+  const wardId=$('book-ward').value; if(!wardId) return;
+  const ward=state.wards.find(w=>w.id===wardId); if(!ward) return;
+  $('book-site').value=ward.site_id; $('book-site')._searchableSync?.();
+});
+$('book-site').addEventListener('change', ()=>{
+  filterBookWardBySite($('book-site').value);
+});
+
+/* ---------- Queue ---------- */
+async function loadQueue(){
+  let q=sb.from('prescription_queue_view').select('*').in('state',['active','suspended','ready']).order('received_at',{ascending:true});
+  if($('dispensary-filter').value) q=q.eq('dispensary_id',$('dispensary-filter').value);
+  const {data,error}=await q; if(error){toast(error.message,true);return;} renderQueue(data||[]);
+}
+// The row itself is the KPI indicator: a left-to-right fill, coloured by
+// which zone (green/amber/red) the elapsed time against the target sits in.
+// Computed from received_at + that type's own KPI (amber_minutes/red_minutes
+// come straight off the prescription_types row via the view), so every
+// signed-in user's browser can keep it ticking live between reloads.
+function liveKpi(r){
+  if(r.state!=='active' || !r.red_minutes) return null;
+  // Excludes accumulated suspended time (fixed as of the last reload) so
+  // the live ticker matches the paused/resumed elapsed the server computes
+  // - a prescription that was suspended and resumed doesn't count that
+  // paused stretch against it.
+  const suspendedSec = r.suspended_seconds || 0;
+  const elapsedMin = Math.max(0, Math.floor(((Date.now() - new Date(r.received_at).getTime())/1000 - suspendedSec)/60));
+  let colour='green';
+  if(elapsedMin>=r.red_minutes) colour='red';
+  else if(r.amber_minutes!=null && elapsedMin>=r.amber_minutes) colour='amber';
+  const pct = Math.max(0, Math.min(100, (elapsedMin/r.red_minutes)*100));
+  return {elapsedMin, colour, pct};
+}
+// Formats a minute count as "Xh Ym" (or just "Ym" under an hour).
+function formatDuration(mins){
+  mins = Math.max(0, Math.round(mins));
+  const h = Math.floor(mins/60), m = mins%60;
+  return h>0 ? `${h}h ${m}m` : `${m}m`;
+}
+const KPI_FILL_COLOURS = {green:'rgba(76,174,49,.24)', amber:'rgba(210,147,27,.26)', red:'rgba(191,59,50,.28)'};
+function kpiFillStyle(r){
+  const live=liveKpi(r); if(!live) return '';
+  return ` style="background:linear-gradient(to right, ${KPI_FILL_COLOURS[live.colour]} ${live.pct}%, transparent ${live.pct}%)"`;
+}
+function renderQueueRow(r){
+  const cls=['row-clickable']; if(r.state==='suspended') cls.push('row-suspended');
+  // "Being processed by" only matters while it's actually the live claim -
+  // i.e. still sitting in Awaiting dispensing with someone on it.
+  const captionParts=[];
+  if(r.needed_by) captionParts.push(`Needed by ${fmt(r.needed_by)}`);
+  if(r.stage_code==='awaiting_labelling' && r.dispensing_started_by_name) captionParts.push(`Being processed by ${esc(r.dispensing_started_by_name)}`);
+  // Every cell gets the same reserved caption line - even the empty ones -
+  // so every cell in the row has identical content height and its primary
+  // text lines up at the same vertical position. Reserving it only on the
+  // Stage cell (as before) made just that cell taller than the rest, which
+  // pushed its text up out of line with everything else in the row.
+  const emptyCap = '<div class="row-caption"></div>';
+  const stageCaption = `<div class="row-caption">${captionParts.length?`<small class="muted">${captionParts.join(' · ')}</small>`:''}</div>`;
+  return `<tr class="${cls.join(' ')}"${kpiFillStyle(r)} data-open-rx="${r.id}">`+
+    `<td data-label="ID">#${r.display_id}${emptyCap}</td>`+
+    `<td data-label="Flags" class="flag-cell" title="${esc([...(r.flag_list||[]).map(f=>f.name), r.suspend_reason_name?`Suspended: ${r.suspend_reason_name}`:null].filter(Boolean).join(', '))}">${(r.flag_list||[]).map(f=>flagIconHtml(f,24)).join('')}${r.suspend_reason_name?reasonIconHtml({emoji:r.suspend_reason_emoji,image_data_uri:r.suspend_reason_image,colour:r.suspend_reason_colour},24):''}${emptyCap}</td>`+
+    `<td data-label="Hospital no."><strong>${esc(r.hospital_number)}</strong>${emptyCap}</td>`+
+    `<td data-label="Ward">${esc(r.ward_name||'—')}${emptyCap}</td>`+
+    `<td data-label="Type">${esc(r.prescription_type_name||'—')}${emptyCap}</td>`+
+    `<td data-label="Items">${r.item_count??'—'}${emptyCap}</td>`+
+    `<td data-label="Stage">${esc(r.stage_name)}${r.state==='suspended'?' · Suspended':''}${stageCaption}</td>`+
+    `<td data-label="Elapsed" class="elapsed-cell">${formatDuration(r.elapsed_minutes)}${emptyCap}</td></tr>`;
+}
+// Which process bucket a row belongs to. Suspended items get pulled into
+// their own section regardless of stage, since they need attention.
+// "Awaiting dispensing" vs "Being processed" is the same underlying stage
+// (awaiting_labelling) - the split is purely on whether it's been claimed.
+// 'ready' (Checked) is in this list purely so the Ready tile filter can
+// display them - they're excluded from the normal queue by applyQueueFilter
+// unless that filter is explicitly on. Without it here, clicking the Ready
+// tile showed a count but rendered an empty table, since processBucket
+// returns 'ready' for them and the render loop only walks this array.
+const BUCKET_ORDER = ['suspended','awaiting_screening','awaiting_dispensing','being_dispensed','awaiting_final_check','ready'];
+const BUCKET_LABELS = {suspended:'Suspended', awaiting_screening:'Awaiting clinical screening', awaiting_dispensing:'Awaiting dispensing', being_dispensed:'Being processed', awaiting_final_check:'Awaiting final check', ready:'Checked — ready'};
+function processBucket(r){
+  if(r.state==='suspended') return 'suspended';
+  if(r.state==='ready') return 'ready';
+  if(r.stage_code==='awaiting_labelling') return r.dispensing_started_by ? 'being_dispensed' : 'awaiting_dispensing';
+  return r.stage_code;
+}
+function renderQueue(rows){
+  state.queueRows=rows;
+  // Tile counts always reflect the true totals, regardless of any active
+  // filter - the filter only affects which rows are listed below.
+  $('sum-active').textContent=rows.filter(r=>r.state==='active').length; $('sum-suspended').textContent=rows.filter(r=>r.state==='suspended').length; $('sum-ready').textContent=rows.filter(r=>r.state==='ready').length;
+  updateOverTargetTile();
+  renderTilesByType(rows.filter(r=>r.state!=='ready'));
+  renderTilesBySite();
+  renderActiveFilterBar();
+  const displayRows = applyQueueFilter(rows);
+  if(!displayRows.length){ $('queue-body').innerHTML='<tr><td colspan="8" class="muted">No prescriptions match.</td></tr>'; startQueueTicker(); return; }
+  const buckets=new Map();
+  for(const r of displayRows){ const b=processBucket(r); if(!buckets.has(b)) buckets.set(b,[]); buckets.get(b).push(r); }
+  const knownIds = state.prescriptionTypes.map(t=>t.id);
+  let html='';
+  for(const bucket of BUCKET_ORDER){
+    const list=buckets.get(bucket); if(!list || !list.length) continue;
+    html += `<tr class="bucket-heading" data-bucket="${bucket}"><td colspan="8">${esc(BUCKET_LABELS[bucket]||bucket)} <span class="group-count">${list.length}</span></td></tr>`;
+    // Sub-grouped by type within each process section.
+    const typeGroups=new Map();
+    for(const r of list){ const key=r.prescription_type_id; if(!typeGroups.has(key)) typeGroups.set(key,[]); typeGroups.get(key).push(r); }
+    const orderedIds = knownIds.filter(id=>typeGroups.has(id)).concat([...typeGroups.keys()].filter(id=>!knownIds.includes(id)));
+    for(const id of orderedIds){
+      const sub=typeGroups.get(id);
+      const label = (state.prescriptionTypes.find(t=>t.id===id)||{}).name || sub[0]?.prescription_type_name || 'Other';
+      html += `<tr class="group-heading" data-type-id="${id}"><td colspan="8">${esc(label)} <span class="group-count">${sub.length}</span></td></tr>`;
+      html += sub.map(renderQueueRow).join('');
+    }
+  }
+  $('queue-body').innerHTML=html;
+  document.querySelectorAll('[data-open-rx]').forEach(tr=>tr.addEventListener('click',()=>openPrescription(tr.dataset.openRx)));
+  startQueueTicker();
+}
+// Applies the current tile/hospital/category filter and search term on
+// top of the usual "Checked leaves the queue" rule - a status filter for
+// "ready" deliberately overrides that rule, since asking to see Ready is
+// asking to see exactly that.
+function applyQueueFilter(rows){
+  let out = rows;
+  if(state.queueFilter.statusKind==='state'){
+    out = out.filter(r=>r.state===state.queueFilter.statusValue);
+  } else if(state.queueFilter.statusKind==='overtarget'){
+    out = out.filter(r=>{ const live=liveKpi(r); return live && live.colour==='red'; });
+  } else {
+    out = out.filter(r=>r.state!=='ready');
+  }
+  if(state.queueFilter.siteId){
+    out = out.filter(r=>r.site_id===state.queueFilter.siteId);
+  }
+  const term = ($('queue-search')?.value||'').trim().toLowerCase();
+  if(term){
+    // Searching by hospital number overrides the Inpatient/TTO category
+    // view on purpose - you're looking for one patient's prescriptions
+    // wherever they are, not browsing one team's slice of the queue.
+    out = out.filter(r=>(r.hospital_number||'').toLowerCase().includes(term));
+  } else if(state.queueFilter.category==='tto'){
+    out = out.filter(r=>r.prescription_type_category_tto);
+  } else if(state.queueFilter.category==='inpatient'){
+    out = out.filter(r=>r.prescription_type_category_inpatient);
+  }
+  return out;
+}
+function setQueueFilterStatus(kind, value){
+  const same = state.queueFilter.statusKind===kind && state.queueFilter.statusValue===value;
+  state.queueFilter.statusKind = same ? null : kind;
+  state.queueFilter.statusValue = same ? null : value;
+  renderQueue(state.queueRows);
+}
+function setQueueFilterSite(siteId){
+  state.queueFilter.siteId = state.queueFilter.siteId===siteId ? null : siteId;
+  renderQueue(state.queueRows);
+}
+function setQueueFilterCategory(category){
+  state.queueFilter.category = category || null;
+  document.querySelectorAll('#category-tabs [data-category]').forEach(t=>t.classList.toggle('active', t.dataset.category===(category||'')));
+  renderQueue(state.queueRows);
+}
+function clearQueueFilter(){
+  state.queueFilter = {statusKind:null,statusValue:null,siteId:null,category:null};
+  $('queue-search').value='';
+  document.querySelectorAll('#category-tabs [data-category]').forEach(t=>t.classList.toggle('active', t.dataset.category===''));
+  renderQueue(state.queueRows);
+}
+function renderActiveFilterBar(){
+  const bar=$('active-filter-bar');
+  const parts=[];
+  if(state.queueFilter.statusKind==='state') parts.push(`Status: ${state.queueFilter.statusValue}`);
+  if(state.queueFilter.statusKind==='overtarget') parts.push('Over target');
+  if(state.queueFilter.siteId){ const s=state.sites.find(x=>x.id===state.queueFilter.siteId); parts.push(`Site: ${s?s.name:'—'}`); }
+  const term=($('queue-search')?.value||'').trim();
+  if(term){ parts.push(`Search: "${term}"`); }
+  else if(state.queueFilter.category){ parts.push(`Category: ${state.queueFilter.category==='tto'?'TTO':'Inpatient'}`); }
+  document.querySelectorAll('[data-filter-status]').forEach(b=>{
+    const key=b.dataset.filterStatus;
+    const isActive = (key==='overtarget' && state.queueFilter.statusKind==='overtarget') || (state.queueFilter.statusKind==='state' && state.queueFilter.statusValue===key);
+    b.classList.toggle('summary-card-active', isActive);
+  });
+  if(!parts.length){ bar.classList.add('hidden'); return; }
+  $('active-filter-text').textContent = `Showing: ${parts.join(' · ')}`;
+  bar.classList.remove('hidden');
+}
+$('clear-filter-btn').addEventListener('click', clearQueueFilter);
+document.querySelectorAll('#category-tabs [data-category]').forEach(t=>t.addEventListener('click', ()=>setQueueFilterCategory(t.dataset.category)));
+let queueSearchDebounce;
+$('queue-search').addEventListener('input', ()=>{
+  clearTimeout(queueSearchDebounce);
+  queueSearchDebounce=setTimeout(()=>renderQueue(state.queueRows), 200);
+});
+document.querySelectorAll('[data-filter-status]').forEach(b=>b.addEventListener('click', ()=>{
+  const key=b.dataset.filterStatus;
+  if(key==='overtarget') setQueueFilterStatus('overtarget', null);
+  else setQueueFilterStatus('state', key);
+}));
+function renderTilesBySite(){
+  $('tiles-by-site').innerHTML = state.sites.map(s=>{
+    const activeCls = state.queueFilter.siteId===s.id ? ' tiles-by-type-row-active' : '';
+    return `<button type="button" class="tiles-by-type-row${activeCls}" data-jump-site="${s.id}"><span>${esc(s.name)}</span></button>`;
+  }).join('') || '<p class="muted tiny">No hospital sites configured yet.</p>';
+  document.querySelectorAll('[data-jump-site]').forEach(b=>b.addEventListener('click', ()=>setQueueFilterSite(b.dataset.jumpSite)));
+}
+// Tiles-flyout breakdown by prescription type - click one to jump straight
+// to that type's section in the live queue below.
+// Item totals (not request counts) per category, broken down by stage -
+// e.g. "25 items awaiting labelling" for Inpatient - so staff can see the
+// real workload rather than "6 requests" hiding that one request might
+// carry 20 items. Suspended items and anything not currently active are
+// excluded, since this is about live work still to be done.
+const TILES_STAGE_BREAKDOWN = [
+  {code:'awaiting_screening', label:'awaiting screening'},
+  {code:'awaiting_labelling', label:'awaiting/being labelled'},
+  {code:'awaiting_final_check', label:'awaiting checking'},
+];
+function renderTilesByType(displayRows){
+  const typeById = new Map(state.prescriptionTypes.map(t=>[t.id,t]));
+  const active = displayRows.filter(r=>r.state==='active');
+  const categories = [
+    {key:'inpatient', label:'Inpatient', match:t=>t?.category_inpatient},
+    {key:'tto', label:'TTO', match:t=>t?.category_tto},
+  ];
+  let html='';
+  for(const cat of categories){
+    const rowsForCat = active.filter(r=>cat.match(typeById.get(r.prescription_type_id)));
+    const lines = TILES_STAGE_BREAKDOWN.map(b=>{
+      const items = rowsForCat.filter(r=>r.stage_code===b.code).reduce((sum,r)=>sum+(r.item_count||0),0);
+      return items ? `<button type="button" class="tiles-by-type-row" data-jump-stage="${b.code}"><span>${items} item${items===1?'':'s'} ${b.label}</span></button>` : '';
+    }).filter(Boolean).join('');
+    if(!lines) continue;
+    html += `<div class="tiles-category-block"><strong>${esc(cat.label)}</strong>${lines}</div>`;
+  }
+  $('tiles-by-type').innerHTML = html || '<p class="muted tiny">No active Inpatient or TTO items right now.</p>';
+  document.querySelectorAll('[data-jump-stage]').forEach(b=>b.addEventListener('click', ()=>{
+    document.querySelector('[data-view="dashboard"]').click();
+    $('tiles-flyout').classList.remove('open');
+    requestAnimationFrame(()=>{
+      const target=document.querySelector(`[data-bucket="${b.dataset.jumpStage==='awaiting_labelling'?'awaiting_dispensing':b.dataset.jumpStage}"]`);
+      if(target) target.scrollIntoView({behavior:'smooth', block:'start'});
+    });
+  }));
+}
+function updateOverTargetTile(){
+  const overTarget = (state.queueRows||[]).filter(r=>{ const live=liveKpi(r); return live && live.colour==='red'; }).length;
+  $('sum-red').textContent = overTarget;
+}
+function startQueueTicker(){ if(queueTickTimer) clearInterval(queueTickTimer); queueTickTimer=setInterval(tickQueueBars, 10000); }
+function tickQueueBars(){
+  if(!state.queueRows || !state.queueRows.length) return;
+  for(const r of state.queueRows){
+    const live=liveKpi(r); if(!live) continue;
+    const tr=document.querySelector(`tr[data-open-rx="${r.id}"]`); if(!tr) continue;
+    tr.style.background = `linear-gradient(to right, ${KPI_FILL_COLOURS[live.colour]} ${live.pct}%, transparent ${live.pct}%)`;
+    const cell=tr.querySelector('.elapsed-cell'); if(cell) cell.textContent = formatDuration(live.elapsedMin);
+  }
+  updateOverTargetTile();
+}
+$('refresh-btn').addEventListener('click',loadQueue); $('dispensary-filter').addEventListener('change',loadQueue);
+
+// Warns (non-blocking) if the hospital number just typed already has a
+// recent order - catches accidental duplicate entry while still allowing
+// a genuine second order for the same patient today.
+let hnCheckTimer=null;
+async function checkDuplicateHospitalNumber(){
+  const hn=$('book-hn').value.trim();
+  const warnBox=$('book-hn-warning');
+  if(hn.length<2){ warnBox.classList.add('hidden'); warnBox.innerHTML=''; return; }
+  const since=new Date(Date.now()-24*60*60*1000).toISOString();
+  const {data,error}=await sb.from('prescription_queue_view').select('display_id,stage_name,state,received_at').ilike('hospital_number',hn).gte('received_at',since).order('received_at',{ascending:false}).limit(5);
+  if(error || !data || !data.length){ warnBox.classList.add('hidden'); warnBox.innerHTML=''; return; }
+  const items=data.map(r=>`#${r.display_id} (${r.state==='cancelled'?'Cancelled':esc(r.stage_name)}, ${fmt(r.received_at)})`).join(', ');
+  warnBox.innerHTML = `⚠ Recent order${data.length>1?'s':''} already booked for this hospital number in the last 24h: ${items}`;
+  warnBox.classList.remove('hidden');
+}
+$('book-hn').addEventListener('input', ()=>{ clearTimeout(hnCheckTimer); hnCheckTimer=setTimeout(checkDuplicateHospitalNumber,500); });
+$('book-hn').addEventListener('blur', checkDuplicateHospitalNumber);
+
+$('book-form').addEventListener('submit',async e=>{
+  e.preventDefault();
+  if(!can('perm_book_in')){ toast('You do not have permission to book prescriptions in',true); return; }
+  if(!$('book-site').value){ toast('Please select a hospital/unit',true); return; }
+  if(!$('book-ward').disabled && $('book-ward').options.length>1 && !$('book-ward').value){ toast('Please select a ward',true); return; }
+  if(!$('book-type').value){ toast('Please select a prescription type',true); return; }
+  // Guards against an accidental duplicate booking from a double-click or
+  // double-tap - the button is disabled for the duration of the request,
+  // so a second click before the first response comes back can't fire a
+  // second insert. Re-enabled on every exit path, success or failure.
+  const submitBtn=e.target.querySelector('button[type="submit"]');
+  if(submitBtn.disabled) return;
+  submitBtn.disabled=true;
+  try{
+    const neededByVal = $('book-needed-by').value;
+    const args={p_dispensary_id:$('book-dispensary').value,p_hospital_number:$('book-hn').value,p_prescription_type_id:$('book-type').value,p_site_id:$('book-site').value,p_patient_initials:$('book-initials').value||null,p_ward_id:$('book-ward').value||null,p_item_count:$('book-items').value?Number($('book-items').value):null,p_contains_cd:false,p_notes:$('book-notes').value||null,p_needed_by:neededByVal?new Date(neededByVal).toISOString():null};
+    const {data,error}=await sb.rpc('book_in_prescription',args);
+    if(error){toast(error.message,true);return;}
+    // Flags are a separate call - book_in_prescription's signature is
+    // already long and is granted/used elsewhere, so rather than change
+    // it, attach flags immediately after. If this second call fails the
+    // prescription still exists correctly; only the (advisory) flags are
+    // missing, and they can be added from the popup.
+    const chosenFlags = selectedFlagIds('book-flags');
+    if(chosenFlags.length){
+      const {error:flagErr}=await sb.rpc('set_prescription_flags',{p_prescription_id:data.id, p_flag_ids:chosenFlags});
+      if(flagErr) toast(`Booked in, but flags could not be attached: ${flagErr.message}`, true);
+    }
+    e.target.reset(); fillSelects(); $('book-hn-warning').classList.add('hidden'); $('book-hn-warning').innerHTML='';
+    toast(`Prescription #${data.display_id} booked in`); await loadQueue(); document.querySelector('[data-view="dashboard"]').click();
+  } finally {
+    submitBtn.disabled=false;
+  }
+});
+
+
+
+function renderFacts(rx){
+  const chips=[
+    `${esc(rx.prescription_type_name||'—')}`,
+    rx.site_name ? esc(rx.site_name) : null,
+    rx.ward_name ? esc(rx.ward_name) : null,
+    rx.item_count!=null ? `${rx.item_count} item${rx.item_count===1?'':'s'}` : null,
+    rx.needed_by ? `Needed by ${fmt(rx.needed_by)}` : null,
+  ].filter(Boolean);
+  const overdueIdx = chips.length - (rx.needed_by ? 1 : 0);
+  const overdue = rx.needed_by && rx.state==='active' && new Date(rx.needed_by) < new Date();
+  $('rx-facts').innerHTML = `<div class="rx-hn-line"><strong>${esc(rx.hospital_number)}</strong>${rx.patient_initials?` · ${esc(rx.patient_initials)}`:''}${rx.state==='cancelled'?' <span class="state-pill">Cancelled</span>':''}</div>`+
+    `<div class="rx-chips">${chips.map((c,i)=>`<span class="rx-chip${i===overdueIdx&&overdue?' rx-chip-overdue':''}">${c}</span>`).join('')}${(rx.flag_list||[]).map(flagBadgeHtml).join('')}${rx.suspend_reason_name?`<span class="flag-badge" style="border-color:${esc(rx.suspend_reason_colour||'#6855b6')};color:${esc(rx.suspend_reason_colour||'#6855b6')}">${reasonIconHtml({emoji:rx.suspend_reason_emoji,image_data_uri:rx.suspend_reason_image,colour:rx.suspend_reason_colour},13)} Suspended: ${esc(rx.suspend_reason_name)}</span>`:''}</div>`+
+    (rx.state==='cancelled' && rx.cancel_reason ? `<div class="muted tiny">Cancelled by ${esc(rx.cancelled_by_name||'—')} · ${fmt(rx.cancelled_at)} — ${esc(rx.cancel_reason)}</div>` : '');
+}
+function renderStepper(rx){
+  const steps=[
+    {label:'Booked in', done:true, by:rx.created_by_name, at:rx.received_at},
+    {label:'Screened', done: rx.prescription_type_is_prescreened || !!rx.screened_by_name, by: rx.prescription_type_is_prescreened ? 'Pre-screened' : rx.screened_by_name, at: rx.screened_at, current: rx.stage_code==='awaiting_screening'},
+    {label:'Dispensed', done: !!rx.dispensed_by_name, by: rx.dispensed_by_name, at: rx.dispensed_at, current: rx.stage_code==='awaiting_labelling', inProgressBy: rx.stage_code==='awaiting_labelling' ? rx.dispensing_started_by_name : null},
+    {label:'Checked', done: !!rx.checked_by_name, by: rx.checked_by_name, at: rx.checked_at, current: rx.stage_code==='awaiting_final_check'},
+  ];
+  $('rx-stepper').innerHTML = steps.map(s=>{
+    const cls=['rx-step']; if(s.done) cls.push('done'); if(s.current) cls.push('current'); if(rx.state==='suspended'&&s.current) cls.push('suspended'); if(rx.state==='cancelled') cls.push('cancelled');
+    let caption='';
+    if(s.done && s.by) caption=`${esc(s.by)}${s.at?` · ${fmt(s.at)}`:''}`;
+    else if(s.inProgressBy) caption=`Being processed by ${esc(s.inProgressBy)}`;
+    else if(s.current) caption='In progress';
+    return `<div class="${cls.join(' ')}"><div class="rx-step-dot">${s.done?ICONS.checkSmall:''}</div><div class="rx-step-label">${esc(s.label)}</div>${caption?`<div class="rx-step-caption">${caption}</div>`:''}</div>`;
+  }).join('<div class="rx-step-line"></div>');
+}
+// The single primary action for wherever this prescription currently sits.
+// Colour progresses stage-by-stage; the final action (marking Checked)
+// swaps the play triangle for a checkmark and turns green.
+function actionForStage(rx){
+  if(rx.state!=='active') return null;
+  if(rx.stage_code==='awaiting_labelling' && !rx.dispensing_started_by){
+    if(!can('perm_progress_standard')) return null;
+    return {kind:'start', label:'Start label generation', confirmText:'Start label generation for this prescription?', icon:'play', color:'var(--act-dispense)'};
+  }
+  // Once claimed, anyone with perm_progress_standard can complete it and
+  // send for checking - not only whoever started it. The claim only stops
+  // two people starting label generation on the same script at once; it's
+  // not a lock on who's allowed to finish the job (handover is normal -
+  // one person starts, gets pulled away, someone else finishes).
+  const idx=state.stages.findIndex(s=>s.id===rx.current_stage_id); const next=state.stages[idx+1];
+  if(!next) return null;
+  const allowed = next.requires_role ? can('perm_progress_pharmacist') : can('perm_progress_standard');
+  if(!allowed) return null;
+  const terminal = next.code==='ready';
+  const colourByStage = {awaiting_screening:'var(--act-screen)', awaiting_labelling:'var(--act-final)', awaiting_final_check:'var(--act-final)'};
+  const isSendForChecking = rx.stage_code==='awaiting_labelling';
+  const label = terminal ? 'Mark Checked' : (isSendForChecking ? 'Send for checking' : `Move to ${next.name}`);
+  const confirmText = terminal ? 'Mark this prescription as Checked?' : (isSendForChecking ? 'Complete and send for checking?' : `Move this prescription to ${next.name}?`);
+  return {kind:'advance', code:next.code, label, confirmText, icon: terminal?'check':'play', color: terminal?'var(--act-checked)':(colourByStage[rx.stage_code]||'var(--act-screen)')};
+}
+async function openPrescription(id){
+  const {data:rx,error}=await sb.from('prescription_queue_view').select('*').eq('id',id).single();
+  if(error){toast(error.message,true);return;} state.currentRx=rx;
+  $('rx-title').textContent=`Prescription #${rx.display_id}`; $('rx-subtitle').textContent=`${rx.site_name||'—'} · ${rx.dispensary_name}`;
+  document.querySelectorAll('[data-rx-tab]').forEach(x=>x.classList.toggle('active', x.dataset.rxTab==='details'));
+  $('rx-tab-details').classList.remove('hidden'); $('rx-tab-timeline').classList.add('hidden');
+  renderFacts(rx); renderStepper(rx);
+  hideActionConfirm();
+  await renderActions(rx); await loadTimeline(id);
+  $('flags-toggle-btn').classList.toggle('hidden', !((can('perm_progress_standard')||can('perm_book_in')) && state.prescriptionFlags.length));
+  $('flags-panel').classList.add('hidden');
+  $('destination-toggle-btn').classList.toggle('hidden', !(can('perm_progress_standard') && (rx.state==='active'||rx.state==='suspended')));
+  $('destination-panel').classList.add('hidden');
+  $('suspend-panel').classList.add('hidden'); $('cancel-panel').classList.add('hidden'); $('correction-send-panel').classList.add('hidden');
+  $('rx-dialog').showModal();
+}
+// Every stage-advancing click (including the initial claim) shows a
+// popover confirming exactly what's about to happen before it's actually
+// sent to the database - stops an accidental tap from silently moving a
+// prescription on to the next stage.
+function showActionConfirm(text, onConfirm){
+  $('rx-confirm-text').textContent=text;
+  $('rx-confirm-pop').classList.remove('hidden');
+  const yes=$('rx-confirm-yes'); const no=$('rx-confirm-no');
+  const cleanup=()=>{ yes.replaceWith(yes.cloneNode(true)); no.replaceWith(no.cloneNode(true)); };
+  cleanup();
+  $('rx-confirm-yes').addEventListener('click', async(ev)=>{ ev.stopPropagation(); hideActionConfirm(); await onConfirm(); });
+  $('rx-confirm-no').addEventListener('click', (ev)=>{ ev.stopPropagation(); hideActionConfirm(); });
+}
+function hideActionConfirm(){ $('rx-confirm-pop').classList.add('hidden'); }
+async function renderActions(rx){
+  const box=$('rx-actions'); box.innerHTML='';
+  hideActionConfirm();
+  $('cancel-toggle-btn').classList.toggle('hidden', !(can('perm_suspend') && (rx.state==='active'||rx.state==='suspended')));
+  if(rx.state==='suspended'){
+    if(can('perm_resume')){ const b=document.createElement('button'); b.className='btn primary'; b.textContent='Resume'; b.onclick=(ev)=>{ev.stopPropagation();withButtonGuard(b,()=>resume(rx.id));}; box.appendChild(b); }
+    return;
+  }
+  if(rx.state==='ready' && can('perm_progress_standard')){
+    if(rx.prescription_type_collected_enabled!==false){
+      const b=document.createElement('button');b.className='btn primary';b.textContent='Mark collected';b.onclick=(ev)=>{ev.stopPropagation();withButtonGuard(b,()=>collect(rx.id));};box.appendChild(b);
+    }
+    if(rx.prescription_type_dispatched_enabled){
+      const b=document.createElement('button');b.className='btn secondary';b.textContent='Mark dispatched';b.onclick=(ev)=>{ev.stopPropagation();withButtonGuard(b,()=>dispatchRx(rx.id));};box.appendChild(b);
+    }
+    return;
+  }
+  if(rx.state!=='active') return;
+  const action=actionForStage(rx);
+  if(action){
+    if(action.kind==='claimed'){
+      const span=document.createElement('span'); span.className='rx-claimed-note'; span.textContent=action.label; box.appendChild(span);
+    } else {
+      const btn=document.createElement('button');
+      btn.type='button'; btn.className='rx-action-btn'; btn.title=action.label;
+      btn.style.setProperty('--act-color', action.color);
+      btn.innerHTML = action.icon==='check' ? ICONS.check : ICONS.play;
+      btn.onclick=(ev)=>{
+        ev.stopPropagation();
+        showActionConfirm(action.confirmText, async()=>{
+          if(action.kind==='start') await startDispensing(rx.id);
+          else await advanceAction(rx.id, action.code, action.icon==='check', btn);
+        });
+      };
+      box.appendChild(btn);
+    }
+  }
+  if(can('perm_suspend')){
+    const s=document.createElement('button'); s.type='button'; s.className='icon-btn-lg'; s.title='Suspend';
+    s.innerHTML=ICONS.pause;
+    s.onclick=(ev)=>{ ev.stopPropagation(); hideActionConfirm(); $('correction-send-panel').classList.add('hidden'); $('suspend-panel').classList.toggle('hidden'); syncSuspendOtherRequirement(); };
+    box.appendChild(s);
+  }
+  if(rx.stage_code==='awaiting_final_check' && can('perm_progress_pharmacist')){
+    const u=document.createElement('button'); u.type='button'; u.className='icon-btn-lg'; u.title='Send back for correction';
+    u.innerHTML=ICONS.undo;
+    u.onclick=(ev)=>{ ev.stopPropagation(); hideActionConfirm(); $('suspend-panel').classList.add('hidden'); $('correction-send-panel').classList.toggle('hidden'); };
+    box.appendChild(u);
+  }
+}
+async function startDispensing(id){
+  const {error}=await sb.rpc('start_dispensing',{p_prescription_id:id});
+  if(error){toast(error.message,true);return;} toast('Label generation started — claimed by you'); await refreshOpen(id);
+}
+async function advanceAction(id, code, isFinal, btn){
+  const {error}=await sb.rpc('advance_prescription',{p_prescription_id:id,p_to_stage_code:code});
+  if(error){toast(error.message,true);return;}
+  if(isFinal){
+    if(btn) btn.classList.add('flash-success');
+    toast('Prescription Checked — moved to History');
+    await new Promise(r=>setTimeout(r,350));
+    $('rx-dialog').close(); await loadQueue();
+  } else {
+    toast('Workflow updated'); await refreshOpen(id);
+  }
+}
+async function resume(id){ const {error}=await sb.rpc('resume_prescription',{p_prescription_id:id}); if(error){toast(error.message,true);return;} toast('Prescription resumed'); await refreshOpen(id); }
+async function collect(id){ const {error}=await sb.rpc('mark_collected',{p_prescription_id:id}); if(error){toast(error.message,true);return;} toast('Prescription collected'); $('rx-dialog').close(); await loadQueue(); }
+async function dispatchRx(id){ const {error}=await sb.rpc('mark_dispatched',{p_prescription_id:id}); if(error){toast(error.message,true);return;} toast('Prescription dispatched'); $('rx-dialog').close(); await loadQueue(); }
+
+// Matches "Other" by looking the reason up by id in state, NOT by reading
+// the option's visible text - option labels can now carry an emoji prefix
+// ("\u2744\ufe0f Other"), which a text comparison would fail to match, silently
+// dropping the mandatory-note rule for the one reason that requires it.
+function isOtherReasonId(id){
+  const r = state.suspensionReasons.find(x=>x.id===id);
+  return !!r && r.name.trim().toLowerCase()==='other';
+}
+function syncSuspendOtherRequirement(){
+  const isOther = isOtherReasonId($('suspend-reason').value);
+  $('suspend-note').required=isOther;
+  $('suspend-note').placeholder = isOther ? 'Please give details (required)' : "Note (required if 'Other')";
+}
+$('suspend-reason').addEventListener('change', syncSuspendOtherRequirement);
+$('suspend-btn').addEventListener('click',async(ev)=>{
+  if(!state.currentRx)return;
+  const sel=$('suspend-reason'); const note=$('suspend-note').value.trim();
+  if(isOtherReasonId(sel.value) && !note){ toast('Please give details when suspending for "Other"',true); return; }
+  await withButtonGuard(ev.currentTarget, async()=>{
+    const {error}=await sb.rpc('suspend_prescription',{p_prescription_id:state.currentRx.id,p_reason_id:sel.value,p_free_text:note||null});
+    if(error){toast(error.message,true);return;} $('suspend-panel').classList.add('hidden');$('suspend-note').value='';toast('Prescription suspended');await refreshOpen(state.currentRx.id);
+  });
+});
+$('correction-send-btn').addEventListener('click',async(ev)=>{
+  if(!state.currentRx)return;
+  const reasonId=$('correction-send-reason').value;
+  if(!reasonId){ toast('Please select a correction reason',true); return; }
+  const note=$('correction-send-note').value.trim();
+  await withButtonGuard(ev.currentTarget, async()=>{
+    const {error}=await sb.rpc('send_back_for_correction',{p_prescription_id:state.currentRx.id,p_reason_id:reasonId,p_note:note||null});
+    if(error){toast(error.message,true);return;}
+    $('correction-send-panel').classList.add('hidden'); $('correction-send-note').value='';
+    toast('Sent back for correction — unclaimed and returned to Awaiting dispensing'); $('rx-dialog').close(); await loadQueue();
+  });
+});
+$('destination-toggle-btn').addEventListener('click', ()=>{
+  $('destination-panel').classList.toggle('hidden');
+  if(!$('destination-panel').classList.contains('hidden') && state.currentRx){
+    // Pre-fill with the prescription's current destination so the user is
+    // editing from where it already is, not starting blank.
+    const siteOpts=state.sites.map(s=>`<option value="${s.id}">${esc(s.name)}</option>`).join('');
+    $('destination-site').innerHTML='<option value="" disabled>Select hospital/unit…</option>'+siteOpts;
+    $('destination-site').value=state.currentRx.site_id||'';
+    filterDestinationWardBySite(state.currentRx.site_id, state.currentRx.ward_id);
+    $('destination-site')._searchableSync?.();
+  }
+});
+function filterDestinationWardBySite(siteId, selectedWardId){
+  const list=state.wards.filter(w=>w.active && (!siteId||w.site_id===siteId));
+  const sel=$('destination-ward');
+  if(!siteId){ sel.innerHTML='<option value="">Select a ward…</option>'; sel.disabled=false; }
+  else if(!list.length){ sel.innerHTML='<option value="">No wards for this hospital/unit — standalone</option>'; sel.disabled=true; }
+  else {
+    sel.disabled=false;
+    sel.innerHTML='<option value="">Select a ward…</option>'+list.map(w=>`<option value="${w.id}" ${w.id===selectedWardId?'selected':''}>${esc(w.name)}</option>`).join('');
+  }
+  sel._searchableSync?.();
+}
+$('destination-ward').addEventListener('change', ()=>{
+  const wardId=$('destination-ward').value; if(!wardId) return;
+  const ward=state.wards.find(w=>w.id===wardId); if(!ward) return;
+  $('destination-site').value=ward.site_id; $('destination-site')._searchableSync?.();
+});
+$('destination-site').addEventListener('change', ()=>filterDestinationWardBySite($('destination-site').value, null));
+$('destination-save-btn').addEventListener('click', async(ev)=>{
+  if(!state.currentRx) return;
+  const siteId=$('destination-site').value;
+  if(!siteId){ toast('Please select a hospital/unit',true); return; }
+  if(!$('destination-ward').disabled && $('destination-ward').options.length>1 && !$('destination-ward').value){ toast('Please select a ward',true); return; }
+  await withButtonGuard(ev.currentTarget, async()=>{
+    const {error}=await sb.rpc('change_prescription_destination',{p_prescription_id:state.currentRx.id,p_site_id:siteId,p_ward_id:$('destination-ward').value||null});
+    if(error){toast(error.message,true);return;}
+    $('destination-panel').classList.add('hidden');
+    toast('Destination changed and added to the timeline'); await refreshOpen(state.currentRx.id);
+  });
+});
+$('cancel-toggle-btn').addEventListener('click', ()=>$('cancel-panel').classList.toggle('hidden'));
+$('cancel-confirm-btn').addEventListener('click', async(ev)=>{
+  if(!state.currentRx)return;
+  const reason=$('cancel-reason').value.trim();
+  if(reason.length<3){ toast('Please give a reason to cancel this prescription',true); return; }
+  await withButtonGuard(ev.currentTarget, async()=>{
+    const {error}=await sb.rpc('cancel_prescription',{p_prescription_id:state.currentRx.id,p_reason:reason});
+    if(error){toast(error.message,true);return;}
+    $('cancel-reason').value=''; $('cancel-panel').classList.add('hidden');
+    toast('Prescription cancelled'); $('rx-dialog').close(); await loadQueue();
+  });
+});
+async function refreshOpen(id){ await loadQueue(); await openPrescriptionDataOnly(id); }
+async function openPrescriptionDataOnly(id){
+  const {data}=await sb.from('prescription_queue_view').select('*').eq('id',id).single();
+  if(!data){$('rx-dialog').close();return;}
+  state.currentRx=data; $('rx-title').textContent=`Prescription #${data.display_id}`;
+  renderFacts(data); renderStepper(data);
+  await renderActions(data); await loadTimeline(id);
+}
+
+function eventDetailText(e){
+  const d = e.details || {};
+  switch(e.event_type){
+    case 'BOOKED_IN': return d.needed_by ? `Needed by ${fmt(d.needed_by)}` : '';
+    case 'SUSPENDED': return [d.reason_name, d.note].filter(Boolean).join(' — ');
+    case 'HOSPITAL_NUMBER_CORRECTED': return `${d.old||''} → ${d.new||''}${d.reason?` — ${d.reason}`:''}`;
+    case 'DESTINATION_CHANGED': {
+      const from=[d.old_site,d.old_ward].filter(Boolean).join(' · ')||'—';
+      const to=[d.new_site,d.new_ward].filter(Boolean).join(' · ')||'—';
+      return `${from} → ${to}`;
+    }
+    case 'SENT_BACK_FOR_CORRECTION': return [d.reason_name, d.note].filter(Boolean).join(' — ');
+    case 'FLAGS_CHANGED': return d.flags || '';
+    case 'CANCELLED': return d.reason || '';
+    default: return '';
+  }
+}
+async function loadTimeline(id){
+  const {data,error}=await sb.from('prescription_events').select('*,from_stage:from_stage_id(name),to_stage:to_stage_id(name),profiles:performed_by(display_name)').eq('prescription_id',id).order('performed_at',{ascending:false});
+  if(error){$('timeline').innerHTML=`<p class="error-text">${esc(error.message)}</p>`;return;}
+  $('timeline').innerHTML=(data||[]).map(e=>{
+    const extra=eventDetailText(e);
+    return `<div class="timeline-item"><strong>${esc(eventLabel(e))}</strong><small>${fmt(e.performed_at)} · ${esc(e.profiles?.display_name||'Unknown user')}</small>${extra?`<div class="muted tiny">${esc(extra)}</div>`:''}</div>`;
+  }).join('')||'<p class="muted">No events.</p>';
+}
+function eventLabel(e){ return ({BOOKED_IN:'Booked in',STAGE_ADVANCED:`Moved to ${e.to_stage?.name||'next stage'}`,DISPENSING_STARTED:'Dispensing started',SUSPENDED:'Suspended',RESUMED:'Resumed',COLLECTED:'Collected',DISPATCHED:'Dispatched',HOSPITAL_NUMBER_CORRECTED:'Hospital number corrected',DESTINATION_CHANGED:'Ward/hospital destination changed',SENT_BACK_FOR_CORRECTION:'Sent back for correction',FLAGS_CHANGED:'Flags changed',CANCELLED:'Cancelled'})[e.event_type]||e.event_type.replaceAll('_',' '); }
+$('rx-close').addEventListener('click',()=>$('rx-dialog').close());
+document.querySelectorAll('[data-rx-tab]').forEach(t=>t.addEventListener('click', ()=>{
+  document.querySelectorAll('[data-rx-tab]').forEach(x=>x.classList.remove('active'));
+  t.classList.add('active');
+  $('rx-tab-details').classList.toggle('hidden', t.dataset.rxTab!=='details');
+  $('rx-tab-timeline').classList.toggle('hidden', t.dataset.rxTab!=='timeline');
+}));
+document.querySelectorAll('[data-config-tab]').forEach(t=>t.addEventListener('click', ()=>{
+  document.querySelectorAll('[data-config-tab]').forEach(x=>x.classList.remove('active'));
+  t.classList.add('active');
+  document.querySelectorAll('.config-tab-panel').forEach(p=>p.classList.toggle('hidden', p.id!==`config-tab-${t.dataset.configTab}`));
+}));
+
+$('history-btn').addEventListener('click',searchHistory); $('history-search').addEventListener('keydown',e=>{if(e.key==='Enter')searchHistory()});
+async function searchHistory(){
+  let q=sb.from('prescription_queue_view').select('*').order('received_at',{ascending:false}).limit(200); const term=$('history-search').value.trim(); const st=$('history-state').value;
+  if(st) q=q.eq('state',st); if(term) q=q.ilike('hospital_number',`%${term.replace(/[%_,]/g,'')}%`);
+  const {data,error}=await q; if(error){toast(error.message,true);return;}
+  $('history-body').innerHTML=(data||[]).map(r=>`<tr class="row-clickable" data-open-rx="${r.id}"><td data-label="ID">#${r.display_id}</td><td data-label="Hospital no.">${esc(r.hospital_number)}</td><td data-label="Ward">${esc(r.ward_name||'—')}</td><td data-label="State"><span class="state-pill">${esc(r.state)}</span></td><td data-label="Stage">${esc(r.stage_name)}</td><td data-label="Received">${fmt(r.received_at)}</td></tr>`).join('')||'<tr><td colspan="6" class="muted">No results.</td></tr>';
+  document.querySelectorAll('#history-body [data-open-rx]').forEach(tr=>tr.addEventListener('click',()=>openPrescription(tr.dataset.openRx)));
+}
+
+/* ---------- Responsible Pharmacist ---------- */
+async function loadRP(){
+  const {data,error}=await sb.from('current_rp_view').select('*');
+  if(error){ $('rp-strip').innerHTML=`<div class="rp-chip"><span class="rp-dot unset"></span><span class="rp-none">Responsible Pharmacist status unavailable (${esc(error.message)})</span></div>`; return; }
+  state.rpSessions=data||[]; renderRPStrip();
+}
+// Pressure indicator - a plain-language sentence, not a percentage or a
+// generic "we're busy": names exactly which stage(s) are under pressure so
+// staff know where to send help. Only stages currently amber/red are
+// mentioned at all; if everything's green, the banner is quietly hidden
+// rather than announcing "all normal" (which would just be noise most of
+// the day).
+async function loadPressure(){
+  const {data,error}=await sb.from('pressure_view').select('*');
+  if(error){ $('pressure-banner').classList.add('hidden'); return; }
+  state.pressure=data||[];
+  renderPressureBanner();
+  if(can('perm_manage_config')) renderPressureThresholds();
+}
+function renderPressureBanner(){
+  const banner=$('pressure-banner');
+  const pressured = (state.pressure||[]).filter(p=>p.pressure_colour!=='green');
+  if(!pressured.length){ banner.classList.add('hidden'); return; }
+  const worst = pressured.some(p=>p.pressure_colour==='red') ? 'red' : 'amber';
+  const names = pressured.map(p=>esc(p.stage_name)).join(' and ');
+  banner.className = `pressure-banner pressure-${worst}`;
+  banner.textContent = `Pressure: ${names} ${pressured.length>1?'are':'is'} under ${worst==='red'?'high':'building'} pressure (${pressured.map(p=>`${p.total_items} items ${p.stage_name.toLowerCase()}`).join(', ')})`;
+  banner.classList.remove('hidden');
+}
+function renderPressureThresholds(){
+  const canSet = state.profile.is_superuser;
+  $('pressure-body').innerHTML = (state.pressure||[]).map(p=>{
+    if(!canSet){
+      return `<tr><td>${esc(p.stage_name)}</td><td>${p.amber_items}</td><td>${p.red_items}</td><td class="muted tiny">Superuser only</td></tr>`;
+    }
+    return `<tr data-pressure-stage="${esc(p.stage_code)}">
+      <td>${esc(p.stage_name)}</td>
+      <td><input type="number" min="1" class="pressure-amber" value="${p.amber_items}" style="width:80px"></td>
+      <td><input type="number" min="1" class="pressure-red" value="${p.red_items}" style="width:80px"></td>
+      <td><button class="btn secondary" data-save-pressure="${esc(p.stage_code)}">Save</button></td>
+    </tr>`;
+  }).join('') || '<tr><td colspan="4" class="muted">No pressure thresholds configured.</td></tr>';
+  document.querySelectorAll('[data-save-pressure]').forEach(b=>b.addEventListener('click',()=>savePressureThreshold(b.dataset.savePressure)));
+}
+async function savePressureThreshold(stageCode){
+  const row=document.querySelector(`tr[data-pressure-stage="${stageCode}"]`);
+  const amber=Number(row.querySelector('.pressure-amber').value)||0;
+  const red=Number(row.querySelector('.pressure-red').value)||0;
+  if(amber<=0){ toast('Amber threshold must be greater than zero',true); return; }
+  if(red<=amber){ toast('Red threshold must be higher than amber',true); return; }
+  const {error}=await sb.from('pressure_thresholds').update({amber_items:amber, red_items:red, updated_by:state.profile.id, updated_at:new Date().toISOString()}).eq('stage_code',stageCode);
+  if(error){ toast(error.message,true); return; }
+  toast('Pressure threshold saved'); await loadPressure();
+}
+function renderRPStrip(){
+  const box=$('rp-strip');
+  if(!state.dispensaries.length){ box.innerHTML='<div class="rp-chip"><span class="rp-dot unset"></span><span class="rp-none">No dispensaries configured yet — add one from Configuration to show Responsible Pharmacist status here</span></div>'; return; }
+  const chips = state.dispensaries.map(d=>{
+    const rp = state.rpSessions.find(r=>r.dispensary_id===d.id);
+    const nameHtml = rp ? `${esc(rp.pharmacist_name)}${rp.gphc_number?` <span class="rp-gphc">GPhC ${esc(rp.gphc_number)}</span>`:''}${rp.signed_in_at?` <span class="rp-since">since ${fmt(rp.signed_in_at)}</span>`:''}` : 'Not signed in';
+    return `<div class="rp-chip"><span class="rp-dot ${rp?'set':'unset'}"></span><span class="rp-site">RP ${esc(d.name)}</span><span class="${rp?'rp-name':'rp-none'}">${nameHtml}</span></div>`;
+  }).join('');
+  let controls='';
+  if(can('perm_responsible_pharmacist')){
+    const mine = state.rpSessions.find(r=>r.pharmacist_id===state.profile.id);
+    controls = mine
+      ? `<button id="rp-signout-btn" class="btn ghost" data-dispensary="${mine.dispensary_id}">Sign out as RP (${esc(mine.dispensary_name)})</button>`
+      : `<select id="rp-site-select">${state.dispensaries.map(d=>`<option value="${d.id}">${esc(d.name)}</option>`).join('')}</select><button id="rp-signin-btn" class="btn secondary">Sign in as RP</button>`;
+  }
+  box.innerHTML = chips + controls;
+  if($('rp-signin-btn')) $('rp-signin-btn').addEventListener('click', (ev)=>withButtonGuard(ev.currentTarget, async()=>{ const {error}=await sb.rpc('rp_sign_in',{p_dispensary_id:$('rp-site-select').value}); if(error){toast(error.message,true);return;} toast('Signed in as Responsible Pharmacist'); await loadRP(); }));
+  if($('rp-signout-btn')) $('rp-signout-btn').addEventListener('click', (ev)=>withButtonGuard(ev.currentTarget, async()=>{ const {error}=await sb.rpc('rp_sign_out',{p_dispensary_id:ev.currentTarget.dataset.dispensary}); if(error){toast(error.message,true);return;} toast('Signed out as Responsible Pharmacist'); await loadRP(); }));
+}
+
+/* ---------- Users control panel ---------- */
+async function loadUsers(){
+  const {data,error}=await sb.from('profiles').select('*').order('display_name'); if(error){toast(error.message,true);return;}
+  state.users=data||[];
+  renderUsersTable();
+}
+function renderUsersTable(){
+  const term=($('user-search')?.value||'').trim().toLowerCase();
+  // Admin (not Superuser) doesn't even see that a Superuser account
+  // exists - not just blocked from acting on it. Superuser sees everyone.
+  let list = state.profile.is_superuser ? state.users : state.users.filter(u=>!u.is_superuser);
+  if(term) list = list.filter(u=>u.username.toLowerCase().includes(term) || u.display_name.toLowerCase().includes(term));
+  $('users-body').innerHTML=list.map(u=>{
+    const badges = u.is_superuser
+      ? '<span class="perm-badge super">Superuser — all access</span>'
+      : (ALL_PERMS.filter(p=>u[p.key]).map(p=>`<span class="perm-badge">${esc(p.label)}</span>`).join('') || '<span class="perm-badge off">No permissions</span>');
+    const roleLabel = u.is_superuser ? 'Superuser' : (ROLE_LABELS[u.role]||u.role);
+    let actions='';
+    if(u.id!==state.profile.id && !u.is_superuser){
+      actions = `<div class="filters">
+        <button class="btn ghost" data-manage-user="${u.id}">Manage</button>
+        <button class="btn ${u.active?'danger':'secondary'}" data-toggle-active="${u.id}">${u.active?'Suspend':'Reactivate'}</button>
+        <button class="btn ghost" data-reset-password="${u.id}">Reset password</button>
+      </div>`;
+    }
+    return `<tr><td>${esc(u.username)}</td><td>${esc(u.display_name)}</td><td>${esc(roleLabel)}</td><td>${esc(u.gphc_number||'—')}</td><td>${u.active?'Yes':'No'}</td><td><div class="perm-badges">${badges}</div></td><td>${actions}</td></tr>`;
+  }).join('') || `<tr><td colspan="7" class="muted">${term?'No users match that search.':'No users yet.'}</td></tr>`;
+  $('user-search-count').textContent = term ? `${list.length} of ${state.profile.is_superuser?state.users.length:state.users.filter(u=>!u.is_superuser).length} shown` : '';
+  document.querySelectorAll('[data-manage-user]').forEach(b=>b.addEventListener('click',()=>openManageUser(b.dataset.manageUser)));
+  document.querySelectorAll('[data-toggle-active]').forEach(b=>b.addEventListener('click',()=>quickToggleActive(b.dataset.toggleActive)));
+  document.querySelectorAll('[data-reset-password]').forEach(b=>b.addEventListener('click',()=>quickResetPassword(b.dataset.resetPassword)));
+}
+$('user-search').addEventListener('input', renderUsersTable);
+$('user-search-clear').addEventListener('click', ()=>{ $('user-search').value=''; renderUsersTable(); });
+function generateTempPassword(){
+  const chars='ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnpqrstuvwxyz23456789';
+  const arr=new Uint32Array(14); crypto.getRandomValues(arr);
+  let out=''; for(let i=0;i<14;i++) out+=chars[arr[i]%chars.length];
+  return out;
+}
+async function quickToggleActive(id){
+  const u=state.users.find(x=>x.id===id); if(!u) return;
+  const nextActive=!u.active;
+  const {data,error}=await sb.functions.invoke('manage-user',{body:{user_id:id, active:nextActive}});
+  if(error||data?.error){ toast(data?.error||error.message,true); return; }
+  toast(`${u.display_name} ${nextActive?'reactivated':'suspended'}`); await loadUsers();
+}
+// Shows a generated temporary password in a proper dialog rather than a
+// window.prompt - the old prompt was unstyled, trivially dismissed before
+// the admin had copied anything, and offered no copy button. The password
+// is never stored anywhere, so losing it means resetting again.
+function showTempPassword(username, pwd){
+  $('temp-password-for').textContent = `For ${username}`;
+  $('temp-password-value').textContent = pwd;
+  $('temp-password-dialog').showModal();
+}
+$('temp-password-close').addEventListener('click', ()=>{
+  // Clear it out of the DOM on close so it isn't sitting in the page.
+  $('temp-password-value').textContent = '';
+  $('temp-password-dialog').close();
+});
+$('temp-password-copy').addEventListener('click', async()=>{
+  const pwd = $('temp-password-value').textContent;
+  try{
+    await navigator.clipboard.writeText(pwd);
+    toast('Copied to clipboard');
+  } catch {
+    // Clipboard API needs a secure context and permission; fall back to
+    // selecting the text so the admin can copy it manually rather than
+    // silently doing nothing.
+    const range=document.createRange(); range.selectNodeContents($('temp-password-value'));
+    const sel=window.getSelection(); sel.removeAllRanges(); sel.addRange(range);
+    toast('Select and copy the highlighted password', true);
+  }
+});
+async function quickResetPassword(id){
+  const u=state.users.find(x=>x.id===id); if(!u) return;
+  const pwd=generateTempPassword();
+  const {data,error}=await sb.functions.invoke('manage-user',{body:{user_id:id, password:pwd}});
+  if(error||data?.error){ toast(data?.error||error.message,true); return; }
+  showTempPassword(u.username, pwd);
+  toast('Password reset — user must set their own on next sign-in');
+  await loadUsers();
+}
+
+$('create-user-form').addEventListener('submit',async e=>{
+  e.preventDefault(); const ids=[...$('user-dispensaries').querySelectorAll('input:checked')].map(x=>x.value);
+  const role=$('user-role').value; const gphc=$('user-gphc').value.trim();
+  if(role==='pharmacist' && !gphc){ toast('GPhC number is required for a Pharmacist account',true); return; }
+  const permissions = collectPerms('up');
+  const {data,error}=await sb.functions.invoke('create-user',{body:{username:$('user-username').value,display_name:$('user-display').value,role,password:$('user-password').value,dispensary_ids:ids,permissions,gphc_number:gphc||null}});
+  if(error||data?.error){toast(data?.error||error.message,true);return;}
+  e.target.reset(); document.querySelectorAll('#user-perms-clinical input').forEach(c=>c.checked=false); syncRoleDependentUI('up');
+  toast(`User ${data.username} created`);await loadUsers();
+});
+
+async function openManageUser(id){
+  const u=state.users.find(x=>x.id===id); if(!u) return;
+  state.managingUserId=id;
+  $('manage-user-name').textContent=`${u.username} · ${u.display_name}`;
+  $('mu-display').value=u.display_name; $('mu-role').value=u.role; $('mu-active').checked=u.active; $('mu-password').value=''; $('mu-gphc').value=u.gphc_number||'';
+  TICKABLE_PERMS.forEach(p=>{ const el=document.getElementById(`mu-${p.key}`); if(el) el.checked=!!u[p.key]; });
+  syncRoleDependentUI('mu');
+  const {data:access}=await sb.from('user_dispensary_access').select('dispensary_id').eq('user_id',id);
+  const accessIds=new Set((access||[]).map(a=>a.dispensary_id));
+  $('mu-dispensaries').innerHTML=state.dispensaries.map(d=>`<label><input type="checkbox" value="${d.id}" ${accessIds.has(d.id)?'checked':''}> ${esc(d.name)}</label>`).join('');
+  $('manage-user-dialog').showModal();
+}
+$('manage-user-close').addEventListener('click',()=>$('manage-user-dialog').close());
+$('manage-user-form').addEventListener('submit', async e=>{
+  e.preventDefault(); const id=state.managingUserId; if(!id) return;
+  const role=$('mu-role').value; const gphc=$('mu-gphc').value.trim();
+  if(role==='pharmacist' && !gphc){ toast('GPhC number is required for a Pharmacist account',true); return; }
+  const ids=[...$('mu-dispensaries').querySelectorAll('input:checked')].map(x=>x.value);
+  const permissions=collectPerms('mu');
+  const body={ user_id:id, display_name:$('mu-display').value, role, active:$('mu-active').checked, dispensary_ids:ids, permissions, gphc_number:gphc };
+  if($('mu-password').value) body.password=$('mu-password').value;
+  const {data,error}=await sb.functions.invoke('manage-user',{body});
+  if(error||data?.error){toast(data?.error||error.message,true);return;}
+  toast('User updated'); $('manage-user-dialog').close(); await loadUsers();
+});
+
+/* ---------- Configuration: dispensary / site / ward manual add ---------- */
+$('disp-form').addEventListener('submit',async e=>{e.preventDefault();const {error}=await sb.from('dispensaries').insert({name:$('disp-name').value.trim(),created_by:state.profile.id});if(error){toast(error.message,true);return;}e.target.reset();toast('Dispensary added — tick which hospitals it serves below');await loadReference();await loadRP();});
+$('site-form').addEventListener('submit',async e=>{e.preventDefault();const {error}=await sb.from('sites').insert({name:$('site-name').value.trim(),created_by:state.profile.id});if(error){toast(error.message,true);return;}e.target.reset();toast('Site added');await loadReference();});
+$('ward-form').addEventListener('submit',async e=>{e.preventDefault();const {error}=await sb.from('wards').insert({site_id:$('ward-site').value,name:$('ward-name').value.trim()});if(error){toast(error.message,true);return;}e.target.reset();toast('Ward/location added');await loadReference();});
+
+/* ---------- Configuration: dispensary <-> site coverage matrix ---------- */
+/* ---------- Configuration: rename dispensaries / sites / wards ---------- */
+function renderDispensaryList(){
+  $('disp-list-body').innerHTML = state.dispensaries.map(d=>`<tr data-disp-id="${d.id}">
+    <td><input type="text" class="disp-name-input" value="${esc(d.name)}"></td>
+    <td><button class="btn secondary" data-save-disp="${d.id}">Save</button></td>
+  </tr>`).join('') || '<tr><td colspan="2" class="muted">No dispensaries yet — add one above.</td></tr>';
+  document.querySelectorAll('[data-save-disp]').forEach(b=>b.addEventListener('click',()=>saveDispensaryName(b.dataset.saveDisp)));
+}
+async function saveDispensaryName(id){
+  const row=document.querySelector(`tr[data-disp-id="${id}"]`);
+  const name=row.querySelector('.disp-name-input').value.trim();
+  if(!name){ toast('Name required',true); return; }
+  const {error}=await sb.from('dispensaries').update({name}).eq('id',id);
+  if(error){ toast(error.message,true); return; }
+  toast('Dispensary renamed'); await loadReference(); await loadRP();
+}
+function renderSiteList(){
+  $('site-list-body').innerHTML = state.sites.map(s=>`<tr data-site-id="${s.id}">
+    <td><input type="text" class="site-name-input" value="${esc(s.name)}"></td>
+    <td><button class="btn secondary" data-save-site="${s.id}">Save</button></td>
+  </tr>`).join('') || '<tr><td colspan="2" class="muted">No hospital sites yet — add one above.</td></tr>';
+  document.querySelectorAll('[data-save-site]').forEach(b=>b.addEventListener('click',()=>saveSiteName(b.dataset.saveSite)));
+}
+async function saveSiteName(id){
+  const row=document.querySelector(`tr[data-site-id="${id}"]`);
+  const name=row.querySelector('.site-name-input').value.trim();
+  if(!name){ toast('Name required',true); return; }
+  const {error}=await sb.from('sites').update({name}).eq('id',id);
+  if(error){ toast(error.message,true); return; }
+  toast('Hospital site renamed'); await loadReference();
+}
+function renderWardList(){
+  $('ward-list-body').innerHTML = state.wards.map(w=>{
+    const siteName=(state.sites.find(s=>s.id===w.site_id)||{}).name || '—';
+    return `<tr data-ward-id="${w.id}"${w.active?'':' class="row-suspended"'}>
+      <td>${esc(siteName)}</td>
+      <td><input type="text" class="ward-name-input" value="${esc(w.name)}"></td>
+      <td>${w.active?'Visible':'Hidden'}</td>
+      <td class="filters">
+        <button class="btn secondary" data-save-ward="${w.id}">Save</button>
+        <button class="btn ghost" data-toggle-ward="${w.id}">${w.active?'Hide':'Show'}</button>
+        <button class="btn danger" data-delete-ward="${w.id}">Delete</button>
+      </td>
+    </tr>`;
+  }).join('') || '<tr><td colspan="4" class="muted">No wards yet — add one above.</td></tr>';
+  document.querySelectorAll('[data-save-ward]').forEach(b=>b.addEventListener('click',()=>saveWardName(b.dataset.saveWard)));
+  document.querySelectorAll('[data-toggle-ward]').forEach(b=>b.addEventListener('click',()=>toggleWardActive(b.dataset.toggleWard)));
+  document.querySelectorAll('[data-delete-ward]').forEach(b=>b.addEventListener('click',()=>deleteWard(b.dataset.deleteWard)));
+}
+async function toggleWardActive(id){
+  const w=state.wards.find(x=>x.id===id); if(!w) return;
+  const nextActive=!w.active;
+  const {error}=await sb.from('wards').update({active:nextActive}).eq('id',id);
+  if(error){ toast(error.message,true); return; }
+  toast(`${w.name} ${nextActive?'shown':'hidden'}`); await loadReference();
+}
+async function deleteWard(id){
+  const w=state.wards.find(x=>x.id===id); if(!w) return;
+  if(!window.confirm(`Delete "${w.name}" permanently? This can't be undone.`)) return;
+  const {error}=await sb.from('wards').delete().eq('id',id);
+  if(error){
+    if(/foreign key|violates/i.test(error.message)) toast(`Can't delete "${w.name}" — it has prescriptions recorded against it. Use Hide instead to remove it from selection without losing history.`,true);
+    else toast(error.message,true);
+    return;
+  }
+  toast(`${w.name} deleted`); await loadReference();
+}
+async function saveWardName(id){
+  const row=document.querySelector(`tr[data-ward-id="${id}"]`);
+  const name=row.querySelector('.ward-name-input').value.trim();
+  if(!name){ toast('Name required',true); return; }
+  const {error}=await sb.from('wards').update({name}).eq('id',id);
+  if(error){ toast(error.message,true); return; }
+  toast('Ward renamed'); await loadReference();
+}
+
+function renderDispensarySites(){
+  const head=$('disp-sites-table').querySelector('thead tr');
+  const wardCount=(siteId)=>state.wards.filter(w=>w.active && w.site_id===siteId).length;
+  head.innerHTML = '<th>Dispensary</th>' + state.sites.map(s=>`<th>${esc(s.name)}<br><small class="muted tiny">${wardCount(s.id)} ward${wardCount(s.id)===1?'':'s'}</small></th>`).join('');
+  if(!state.dispensaries.length){ $('disp-sites-body').innerHTML=`<tr><td colspan="${1+state.sites.length}" class="muted">Add a dispensary above first.</td></tr>`; return; }
+  if(!state.sites.length){ $('disp-sites-body').innerHTML=`<tr><td class="muted">Add a hospital site above to link it here.</td></tr>`; return; }
+  $('disp-sites-body').innerHTML = state.dispensaries.map(d=>{
+    const cells = state.sites.map(s=>{
+      const checked = state.dispensarySites.some(ds=>ds.dispensary_id===d.id && ds.site_id===s.id);
+      return `<td style="text-align:center"><input type="checkbox" data-disp="${d.id}" data-site="${s.id}" ${checked?'checked':''}></td>`;
+    }).join('');
+    return `<tr><td>${esc(d.name)}</td>${cells}</tr>`;
+  }).join('');
+  $('disp-sites-body').querySelectorAll('input[type="checkbox"]').forEach(cb=>cb.addEventListener('change', async()=>{
+    const dispId=cb.dataset.disp, siteId=cb.dataset.site;
+    if(cb.checked){
+      const {error}=await sb.from('dispensary_sites').insert({dispensary_id:dispId,site_id:siteId});
+      if(error){ toast(error.message,true); cb.checked=false; return; }
+      state.dispensarySites.push({dispensary_id:dispId,site_id:siteId});
+    } else {
+      const {error}=await sb.from('dispensary_sites').delete().eq('dispensary_id',dispId).eq('site_id',siteId);
+      if(error){ toast(error.message,true); cb.checked=true; return; }
+      state.dispensarySites = state.dispensarySites.filter(ds=>!(ds.dispensary_id===dispId && ds.site_id===siteId));
+    }
+    fillSelects();
+  }));
+}
+
+/* ---------- Configuration: prescription types (dynamic, per-type KPI, prescreened routing) ---------- */
+function renderPrescriptionTypes(){
+  $('ptype-body').innerHTML = state.prescriptionTypes.map(t=>{
+    const a=hm(t.amber_minutes), r=hm(t.red_minutes);
+    return `<tr data-ptype="${t.id}">
+      <td><input type="text" class="pt-name" value="${esc(t.name)}" style="min-width:120px"></td>
+      <td style="text-align:center"><input type="checkbox" class="pt-prescreened" ${t.is_prescreened?'checked':''}></td>
+      <td style="text-align:center"><input type="checkbox" class="pt-tto" ${t.category_tto?'checked':''}></td>
+      <td style="text-align:center"><input type="checkbox" class="pt-inpatient" ${t.category_inpatient?'checked':''}></td>
+      <td style="text-align:center"><input type="checkbox" class="pt-collected" ${t.collected_enabled?'checked':''}></td>
+      <td style="text-align:center"><input type="checkbox" class="pt-dispatched" ${t.dispatched_enabled?'checked':''}></td>
+      <td class="filters"><input type="number" min="0" class="pt-amber-h" value="${a.h}" style="width:56px">h <input type="number" min="0" max="59" class="pt-amber-m" value="${a.m}" style="width:56px">m</td>
+      <td class="filters"><input type="number" min="0" class="pt-red-h" value="${r.h}" style="width:56px">h <input type="number" min="0" max="59" class="pt-red-m" value="${r.m}" style="width:56px">m</td>
+      <td>${t.is_default?'<span class="perm-badge super">Default</span>':`<button class="btn ghost" data-set-default-ptype="${t.id}">Make default</button>`}</td>
+      <td class="filters"><button class="btn secondary" data-save-ptype="${t.id}">Save</button><button class="btn ghost" data-deactivate-ptype="${t.id}">Deactivate</button></td>
+    </tr>`;
+  }).join('') || '<tr><td colspan="10" class="muted">No prescription types yet — add one above.</td></tr>';
+  document.querySelectorAll('[data-save-ptype]').forEach(b=>b.addEventListener('click',()=>savePrescriptionType(b.dataset.savePtype)));
+  document.querySelectorAll('[data-deactivate-ptype]').forEach(b=>b.addEventListener('click',()=>deactivatePrescriptionType(b.dataset.deactivatePtype)));
+  document.querySelectorAll('[data-set-default-ptype]').forEach(b=>b.addEventListener('click',()=>setDefaultPrescriptionType(b.dataset.setDefaultPtype)));
+}
+$('ptype-form').addEventListener('submit', async e=>{
+  e.preventDefault();
+  const name=$('ptype-name').value.trim();
+  const isPrescreened=$('ptype-prescreened').checked;
+  const categoryTto=$('ptype-tto').checked;
+  const categoryInpatient=$('ptype-inpatient').checked;
+  const collectedEnabled=$('ptype-collected').checked;
+  const dispatchedEnabled=$('ptype-dispatched').checked;
+  const amber=(Number($('ptype-amber-h').value)||0)*60+(Number($('ptype-amber-m').value)||0);
+  const red=(Number($('ptype-red-h').value)||0)*60+(Number($('ptype-red-m').value)||0);
+  if(!name){ toast('Name required',true); return; }
+  if(amber<=0||red<=0){ toast('Enter a turnaround time greater than zero for both amber and red',true); return; }
+  if(red<=amber){ toast('Red must be a longer turnaround than amber',true); return; }
+  let code=slugify(name);
+  const payload={code, name, is_prescreened:isPrescreened, category_tto:categoryTto, category_inpatient:categoryInpatient, collected_enabled:collectedEnabled, dispatched_enabled:dispatchedEnabled, amber_minutes:amber, red_minutes:red, created_by:state.profile.id};
+  let {error}=await sb.from('prescription_types').insert(payload);
+  if(error && /duplicate key/i.test(error.message)){
+    code = `${code}_${Math.floor(Math.random()*900+100)}`;
+    ({error}=await sb.from('prescription_types').insert({...payload, code}));
+  }
+  if(error){ toast(error.message,true); return; }
+  e.target.reset(); $('ptype-collected').checked=true; toast(`Prescription type "${name}" added`); await loadReference();
+});
+async function savePrescriptionType(id){
+  const row=document.querySelector(`tr[data-ptype="${id}"]`);
+  const name=row.querySelector('.pt-name').value.trim();
+  const isPrescreened=row.querySelector('.pt-prescreened').checked;
+  const categoryTto=row.querySelector('.pt-tto').checked;
+  const categoryInpatient=row.querySelector('.pt-inpatient').checked;
+  const collectedEnabled=row.querySelector('.pt-collected').checked;
+  const dispatchedEnabled=row.querySelector('.pt-dispatched').checked;
+  const ah=Number(row.querySelector('.pt-amber-h').value)||0, am=Number(row.querySelector('.pt-amber-m').value)||0;
+  const rh=Number(row.querySelector('.pt-red-h').value)||0, rm=Number(row.querySelector('.pt-red-m').value)||0;
+  const amber=ah*60+am, red=rh*60+rm;
+  if(!name){ toast('Name required',true); return; }
+  if(amber<=0||red<=0){ toast('Enter a turnaround time greater than zero for both amber and red',true); return; }
+  if(red<=amber){ toast('Red must be a longer turnaround than amber',true); return; }
+  const {error}=await sb.from('prescription_types').update({name, is_prescreened:isPrescreened, category_tto:categoryTto, category_inpatient:categoryInpatient, collected_enabled:collectedEnabled, dispatched_enabled:dispatchedEnabled, amber_minutes:amber, red_minutes:red}).eq('id',id);
+  if(error){ toast(error.message,true); return; }
+  toast('Prescription type saved'); await loadReference(); await loadQueue();
+}
+async function deactivatePrescriptionType(id){
+  const t=state.prescriptionTypes.find(x=>x.id===id);
+  const {error}=await sb.from('prescription_types').update({active:false}).eq('id',id);
+  if(error){ toast(error.message,true); return; }
+  toast(`${t?.name||'Type'} deactivated${t?.is_default?' — pick a new default':''}`); await loadReference();
+}
+async function setDefaultPrescriptionType(id){
+  await sb.from('prescription_types').update({is_default:false}).eq('is_default',true);
+  const {error}=await sb.from('prescription_types').update({is_default:true}).eq('id',id);
+  if(error){ toast(error.message,true); return; }
+  toast('Default prescription type updated'); await loadReference();
+}
+
+/* ---------- Configuration: suspension reasons (dynamic; "Other" is the only fixed one) ---------- */
+
+// Shared: read a chosen icon file into a data URI, with the same 48KB
+// client-side cap the flags form uses (base64 inflates ~33%, landing
+// under the database's 64KB constraint). Returns null if nothing chosen.
+async function readIconFile(inputId){
+  const file = $(inputId).files[0];
+  if(!file) return null;
+  if(file.size > 48*1024){ toast(`That image is ${Math.round(file.size/1024)}KB — please use an icon under 48KB`, true); $(inputId).value=''; return null; }
+  return await new Promise((res)=>{
+    const r=new FileReader(); r.onload=()=>res(r.result); r.onerror=()=>res(null); r.readAsDataURL(file);
+  });
+}
+// Icon for a reason row - falls back to a plain coloured dot when the
+// reason has no emoji or image, so the column never looks broken.
+function reasonIconHtml(r, size=16){
+  if(r.image_data_uri) return `<img src="${esc(r.image_data_uri)}" alt="" style="width:${size}px;height:${size}px;object-fit:contain;vertical-align:middle">`;
+  if(r.emoji) return `<span style="font-size:${size}px;line-height:1">${esc(r.emoji)}</span>`;
+  return `<span class="reason-dot" style="background:${esc(r.colour||'#6855b6')}"></span>`;
+}
+function renderSuspensionReasons(){
+  $('reason-body').innerHTML = state.suspensionReasons.map(r=>{
+    const isOther = r.name.trim().toLowerCase()==='other';
+    if(isOther){
+      return `<tr><td>${reasonIconHtml(r,18)}</td><td>${esc(r.name)}</td><td></td><td class="muted tiny">Fixed — enables the free-text box, can't be renamed or removed</td></tr>`;
+    }
+    return `<tr data-reason-id="${r.id}">
+      <td>${reasonIconHtml(r,18)}</td>
+      <td><input type="text" class="reason-name-input" value="${esc(r.name)}"></td>
+      <td><input type="color" class="reason-colour-input" value="${esc(r.colour||'#6855b6')}"></td>
+      <td class="filters"><button class="btn secondary" data-save-reason="${r.id}">Save</button><button class="btn ghost" data-deactivate-reason="${r.id}">Deactivate</button></td>
+    </tr>`;
+  }).join('') || '<tr><td colspan="4" class="muted">No suspension reasons yet.</td></tr>';
+  document.querySelectorAll('[data-deactivate-reason]').forEach(b=>b.addEventListener('click',()=>deactivateSuspensionReason(b.dataset.deactivateReason)));
+  document.querySelectorAll('[data-save-reason]').forEach(b=>b.addEventListener('click',()=>saveSuspensionReasonName(b.dataset.saveReason)));
+}
+async function saveSuspensionReasonName(id){
+  const row=document.querySelector(`tr[data-reason-id="${id}"]`);
+  const name=row.querySelector('.reason-name-input').value.trim();
+  if(!name){ toast('Name required',true); return; }
+  if(name.toLowerCase()==='other'){ toast('Can\'t rename to "Other" — that name is reserved for the fixed free-text reason',true); return; }
+  const {error}=await sb.from('suspension_reasons').update({name, colour: row.querySelector('.reason-colour-input').value}).eq('id',id);
+  if(error){ toast(error.message,true); return; }
+  toast('Suspension reason renamed'); await loadReference();
+}
+$('reason-form').addEventListener('submit', async e=>{
+  e.preventDefault();
+  const name=$('reason-name').value.trim(); if(!name) return;
+  const img=await readIconFile('reason-image');
+  const {error}=await sb.from('suspension_reasons').insert({name, emoji:$('reason-emoji').value.trim()||null, image_data_uri:img, colour:$('reason-colour').value});
+  if(error){ toast(error.message,true); return; }
+  e.target.reset(); toast(`Suspension reason "${name}" added`); await loadReference();
+});
+async function deactivateSuspensionReason(id){
+  const r=state.suspensionReasons.find(x=>x.id===id);
+  if(r && r.name.trim().toLowerCase()==='other'){ toast('"Other" can\'t be removed — it powers the free-text box',true); return; }
+  const {error}=await sb.from('suspension_reasons').update({active:false}).eq('id',id);
+  if(error){ toast(error.message,true); return; }
+  toast(`${r?.name||'Reason'} deactivated`); await loadReference();
+}
+/* ---------- Configuration: prescription flags (superuser only) ---------- */
+// Renders a flag's icon - either its emoji or its inline image. Kept in
+// one place so the badge looks identical in the queue, the popup and the
+// admin table.
+function flagIconHtml(f, size=16){
+  if(f.image_data_uri) return `<img src="${esc(f.image_data_uri)}" alt="" style="width:${size}px;height:${size}px;object-fit:contain;vertical-align:middle">`;
+  return `<span style="font-size:${size}px;line-height:1">${esc(f.emoji||'')}</span>`;
+}
+function flagBadgeHtml(f){
+  return `<span class="flag-badge" style="border-color:${esc(f.colour||'#0c5cab')};color:${esc(f.colour||'#0c5cab')}" title="${esc(f.name)}">${flagIconHtml(f,13)} ${esc(f.name)}</span>`;
+}
+function renderFlagsAdmin(){
+  if(!$('flag-body')) return;
+  const canEdit = state.profile.is_superuser;
+  document.querySelector('[data-config-tab="flags"]').classList.toggle('hidden', !canEdit);
+  $('flag-form').classList.toggle('hidden', !canEdit);
+  $('flag-body').innerHTML = state.prescriptionFlags.map(f=>{
+    if(!canEdit) return `<tr><td>${flagIconHtml(f,18)}</td><td>${esc(f.name)}</td><td>${esc(f.colour)}</td><td>${f.sort_order}</td><td class="muted tiny">Superuser only</td></tr>`;
+    return `<tr data-flag-id="${f.id}">
+      <td>${flagIconHtml(f,18)}</td>
+      <td><input type="text" class="flag-name-input" value="${esc(f.name)}"></td>
+      <td><input type="color" class="flag-colour-input" value="${esc(f.colour||'#0c5cab')}"></td>
+      <td><input type="number" class="flag-order-input" value="${f.sort_order}" style="width:70px"></td>
+      <td class="filters"><button class="btn secondary" data-save-flag="${f.id}">Save</button><button class="btn ghost" data-deactivate-flag="${f.id}">Remove</button></td>
+    </tr>`;
+  }).join('') || '<tr><td colspan="5" class="muted">No flags yet — add one above.</td></tr>';
+  document.querySelectorAll('[data-save-flag]').forEach(b=>b.addEventListener('click',()=>saveFlag(b.dataset.saveFlag)));
+  document.querySelectorAll('[data-deactivate-flag]').forEach(b=>b.addEventListener('click',()=>deactivateFlag(b.dataset.deactivateFlag)));
+}
+// Reads the chosen image file into a base64 data URI. Capped client-side
+// at 48KB of raw file, which lands comfortably under the database's 64KB
+// data-URI limit once base64 inflates it by ~33% - better to reject here
+// with a clear message than to let the insert fail on a DB constraint.
+let pendingFlagImage = null;
+$('flag-image').addEventListener('change', async()=>{
+  pendingFlagImage = null;
+  $('flag-preview').classList.add('hidden'); $('flag-preview').innerHTML='';
+  const file = $('flag-image').files[0];
+  if(!file) return;
+  if(file.size > 48*1024){ toast(`That image is ${Math.round(file.size/1024)}KB — please use an icon under 48KB`, true); $('flag-image').value=''; return; }
+  pendingFlagImage = await new Promise((res,rej)=>{
+    const r=new FileReader(); r.onload=()=>res(r.result); r.onerror=()=>rej(new Error('read failed')); r.readAsDataURL(file);
+  }).catch(()=>null);
+  if(!pendingFlagImage){ toast('Could not read that file',true); return; }
+  $('flag-preview').innerHTML = `Preview: <img src="${esc(pendingFlagImage)}" alt="" style="width:20px;height:20px;object-fit:contain;vertical-align:middle">`;
+  $('flag-preview').classList.remove('hidden');
+});
+$('flag-form').addEventListener('submit', async e=>{
+  e.preventDefault();
+  const name=$('flag-name').value.trim();
+  const emoji=$('flag-emoji').value.trim();
+  const colour=$('flag-colour').value;
+  if(!name){ toast('Label required',true); return; }
+  if(!emoji && !pendingFlagImage){ toast('Give the flag either an emoji or an image',true); return; }
+  const nextOrder = (state.prescriptionFlags.reduce((m,f)=>Math.max(m,f.sort_order),0))+10;
+  const {error}=await sb.from('prescription_flags').insert({
+    name, emoji: emoji||null, image_data_uri: pendingFlagImage||null,
+    colour, sort_order: nextOrder, created_by: state.profile.id
+  });
+  if(error){ toast(error.message,true); return; }
+  e.target.reset(); $('flag-colour').value='#0c5cab'; pendingFlagImage=null;
+  $('flag-preview').classList.add('hidden'); $('flag-preview').innerHTML='';
+  toast(`Flag "${name}" added`); await loadReference();
+});
+// Bulk icon import. Accepts either a .zip of images or several image
+// files selected at once - both end up as the same list of
+// {name, dataUri} pairs before anything touches the database.
+//
+// Label comes from the filename: "flag-cold-chain.png" -> "Cold chain".
+// Existing flag names are skipped rather than duplicated, so the same zip
+// can be re-uploaded after adding new icons to it, which is how this is
+// expected to be used over time.
+const IMAGE_EXT = /\.(png|svg|webp)$/i;
+function labelFromFilename(path){
+  const base = path.split('/').pop().replace(IMAGE_EXT, '');
+  const words = base.replace(/^flag[-_]/i, '').replace(/[-_]+/g, ' ').trim();
+  if(!words) return base;
+  // Short single words are almost always acronyms in this context
+  // ("cd" -> CD, "tcm" -> TCM), which sentence-casing would mangle.
+  if(!words.includes(' ') && words.length <= 3) return words.toUpperCase();
+  return words.charAt(0).toUpperCase() + words.slice(1);
+}
+function mimeForName(name){
+  if(/\.svg$/i.test(name)) return 'image/svg+xml';
+  if(/\.webp$/i.test(name)) return 'image/webp';
+  return 'image/png';
+}
+async function collectBulkIcons(fileList){
+  const out = [], skipped = [];
+  for(const file of fileList){
+    if(/\.zip$/i.test(file.name)){
+      if(typeof JSZip === 'undefined'){ skipped.push(`${file.name} — zip support unavailable`); continue; }
+      let zip;
+      try { zip = await JSZip.loadAsync(file); }
+      catch { skipped.push(`${file.name} — could not be read as a zip`); continue; }
+      for(const entry of Object.values(zip.files)){
+        // Skip directories and the __MACOSX/._ metadata macOS adds to zips
+        if(entry.dir || /(^|\/)(__MACOSX|\._)/.test(entry.name)) continue;
+        if(!IMAGE_EXT.test(entry.name)){ skipped.push(`${entry.name} — not a PNG/SVG/WebP`); continue; }
+        const blob = await entry.async('blob');
+        if(blob.size > 48*1024){ skipped.push(`${entry.name} — ${Math.round(blob.size/1024)}KB, over the 48KB limit`); continue; }
+        const typed = new Blob([blob], {type: mimeForName(entry.name)});
+        const dataUri = await new Promise(res=>{ const r=new FileReader(); r.onload=()=>res(r.result); r.onerror=()=>res(null); r.readAsDataURL(typed); });
+        if(!dataUri){ skipped.push(`${entry.name} — could not be read`); continue; }
+        out.push({name: labelFromFilename(entry.name), dataUri});
+      }
+    } else if(IMAGE_EXT.test(file.name)){
+      if(file.size > 48*1024){ skipped.push(`${file.name} — ${Math.round(file.size/1024)}KB, over the 48KB limit`); continue; }
+      const dataUri = await new Promise(res=>{ const r=new FileReader(); r.onload=()=>res(r.result); r.onerror=()=>res(null); r.readAsDataURL(file); });
+      if(!dataUri){ skipped.push(`${file.name} — could not be read`); continue; }
+      out.push({name: labelFromFilename(file.name), dataUri});
+    } else {
+      skipped.push(`${file.name} — not a zip or image`);
+    }
+  }
+  return {icons: out, skipped};
+}
+$('flag-bulk-btn').addEventListener('click', async(ev)=>{
+  const files = $('flag-bulk-file').files;
+  if(!files.length){ toast('Choose a zip or some image files first', true); return; }
+  await withButtonGuard(ev.currentTarget, async()=>{
+    const report = $('flag-bulk-report');
+    report.classList.remove('hidden');
+    report.innerHTML = '<p class="muted tiny">Reading files…</p>';
+
+    const {icons, skipped} = await collectBulkIcons(files);
+    const existing = new Set(state.prescriptionFlags.map(f=>f.name.toLowerCase()));
+    const fresh = [], duplicates = [];
+    for(const ic of icons){
+      if(existing.has(ic.name.toLowerCase())){ duplicates.push(ic.name); continue; }
+      existing.add(ic.name.toLowerCase());
+      fresh.push(ic);
+    }
+
+    let added = 0; const failed = [];
+    let order = state.prescriptionFlags.reduce((m,f)=>Math.max(m,f.sort_order),0);
+    for(const ic of fresh){
+      order += 10;
+      const {error} = await sb.from('prescription_flags').insert({
+        name: ic.name, emoji: null, image_data_uri: ic.dataUri,
+        colour: '#0c5cab', sort_order: order, created_by: state.profile.id
+      });
+      if(error) failed.push(`${ic.name} — ${error.message}`); else added++;
+    }
+
+    const lines = [`<p><strong>${added}</strong> flag${added===1?'':'s'} added.</p>`];
+    if(duplicates.length) lines.push(`<p class="muted tiny">Skipped, already exist: ${duplicates.map(esc).join(', ')}</p>`);
+    if(skipped.length)    lines.push(`<p class="muted tiny">Skipped: ${skipped.map(esc).join('; ')}</p>`);
+    if(failed.length)     lines.push(`<p class="error-text">Failed: ${failed.map(esc).join('; ')}</p>`);
+    report.innerHTML = lines.join('');
+
+    $('flag-bulk-file').value = '';
+    if(added){ toast(`${added} flag${added===1?'':'s'} imported`); await loadReference(); await loadQueue(); }
+  });
+});
+async function saveFlag(id){
+  const row=document.querySelector(`tr[data-flag-id="${id}"]`);
+  const name=row.querySelector('.flag-name-input').value.trim();
+  if(!name){ toast('Label required',true); return; }
+  const {error}=await sb.from('prescription_flags').update({
+    name,
+    colour: row.querySelector('.flag-colour-input').value,
+    sort_order: Number(row.querySelector('.flag-order-input').value)||0
+  }).eq('id',id);
+  if(error){ toast(error.message,true); return; }
+  toast('Flag saved'); await loadReference(); await loadQueue();
+}
+async function deactivateFlag(id){
+  const f=state.prescriptionFlags.find(x=>x.id===id);
+  const {error}=await sb.from('prescription_flags').update({active:false}).eq('id',id);
+  if(error){ toast(error.message,true); return; }
+  toast(`${f?.name||'Flag'} removed`); await loadReference(); await loadQueue();
+}
+// Flag pickers - one on the booking form, one in the popup.
+function renderFlagPicker(containerId, selectedIds=[]){
+  const box=$(containerId); if(!box) return;
+  if(!state.prescriptionFlags.length){ box.innerHTML='<span class="muted tiny">No flags configured yet.</span>'; return; }
+  box.innerHTML = state.prescriptionFlags.map(f=>
+    `<label class="flag-option"><input type="checkbox" value="${f.id}" ${selectedIds.includes(f.id)?'checked':''}> ${flagIconHtml(f,15)} <span>${esc(f.name)}</span></label>`
+  ).join('');
+}
+function selectedFlagIds(containerId){
+  return [...document.querySelectorAll(`#${containerId} input[type=checkbox]:checked`)].map(c=>c.value);
+}
+$('flags-toggle-btn').addEventListener('click', ()=>{
+  $('flags-panel').classList.toggle('hidden');
+  if(!$('flags-panel').classList.contains('hidden') && state.currentRx){
+    renderFlagPicker('rx-flag-picker', (state.currentRx.flag_list||[]).map(f=>f.id));
+  }
+});
+$('flags-save-btn').addEventListener('click', async(ev)=>{
+  if(!state.currentRx) return;
+  await withButtonGuard(ev.currentTarget, async()=>{
+    const {error}=await sb.rpc('set_prescription_flags',{p_prescription_id:state.currentRx.id, p_flag_ids:selectedFlagIds('rx-flag-picker')});
+    if(error){ toast(error.message,true); return; }
+    $('flags-panel').classList.add('hidden');
+    toast('Flags updated'); await refreshOpen(state.currentRx.id);
+  });
+});
+
+function renderCorrectionReasons(){
+  $('correction-reason-body').innerHTML = state.correctionReasons.map(r=>
+    `<tr data-cor-reason-id="${r.id}">
+      <td>${reasonIconHtml(r,18)}</td>
+      <td><input type="text" class="cor-reason-name-input" value="${esc(r.name)}"></td>
+      <td><input type="color" class="cor-reason-colour-input" value="${esc(r.colour||'#bf3b32')}"></td>
+      <td class="filters"><button class="btn secondary" data-save-cor-reason="${r.id}">Save</button><button class="btn ghost" data-deactivate-cor-reason="${r.id}">Deactivate</button></td>
+    </tr>`
+  ).join('') || '<tr><td colspan="4" class="muted">No correction reasons yet.</td></tr>';
+  document.querySelectorAll('[data-deactivate-cor-reason]').forEach(b=>b.addEventListener('click',()=>deactivateCorrectionReason(b.dataset.deactivateCorReason)));
+  document.querySelectorAll('[data-save-cor-reason]').forEach(b=>b.addEventListener('click',()=>saveCorrectionReasonName(b.dataset.saveCorReason)));
+}
+async function saveCorrectionReasonName(id){
+  const row=document.querySelector(`tr[data-cor-reason-id="${id}"]`);
+  const name=row.querySelector('.cor-reason-name-input').value.trim();
+  if(!name){ toast('Name required',true); return; }
+  const {error}=await sb.from('correction_reasons').update({name, colour: row.querySelector('.cor-reason-colour-input').value}).eq('id',id);
+  if(error){ toast(error.message,true); return; }
+  toast('Correction reason renamed'); await loadReference();
+}
+$('correction-reason-form').addEventListener('submit', async e=>{
+  e.preventDefault();
+  const name=$('correction-reason-name').value.trim(); if(!name) return;
+  const img=await readIconFile('correction-reason-image');
+  const {error}=await sb.from('correction_reasons').insert({name, emoji:$('correction-reason-emoji').value.trim()||null, image_data_uri:img, colour:$('correction-reason-colour').value});
+  if(error){ toast(error.message,true); return; }
+  e.target.reset(); toast(`Correction reason "${name}" added`); await loadReference();
+});
+async function deactivateCorrectionReason(id){
+  const r=state.correctionReasons.find(x=>x.id===id);
+  const {error}=await sb.from('correction_reasons').update({active:false}).eq('id',id);
+  if(error){ toast(error.message,true); return; }
+  toast(`${r?.name||'Reason'} deactivated`); await loadReference();
+}
+
+/* ---------- Configuration: Excel import of sites & wards ---------- */
+function parseImportFile(file){
+  const reader=new FileReader();
+  reader.onload=(ev)=>{
+    try{
+      const data=new Uint8Array(ev.target.result);
+      const wb=XLSX.read(data,{type:'array'});
+      const ws=wb.Sheets[wb.SheetNames[0]];
+      const json=XLSX.utils.sheet_to_json(ws,{defval:''});
+      state.importRows=json.map(r=>{
+        const keys=Object.keys(r);
+        const siteKey=keys.find(k=>/^site|hospital$/i.test(String(k).trim()));
+        const wardKey=keys.find(k=>/^ward|location$/i.test(String(k).trim()));
+        return {site:String(r[siteKey!==undefined?siteKey:'Site']||'').trim(), ward:String(r[wardKey!==undefined?wardKey:'Ward']||'').trim()};
+      }).filter(r=>r.site);
+      renderImportPreview();
+    }catch(err){ toast('Could not read that file — check it is a valid spreadsheet',true); }
+  };
+  reader.readAsArrayBuffer(file);
+}
+function renderImportPreview(){
+  const existingSiteNames=new Set(state.sites.map(s=>s.name.toLowerCase()));
+  const wardKey=(siteName,wardName)=>`${siteName.toLowerCase()}::${wardName.toLowerCase()}`;
+  const existingWardKeys=new Set(state.wards.map(w=>wardKey((state.sites.find(s=>s.id===w.site_id)||{}).name||'',w.name)));
+  const rowsHtml=state.importRows.map(r=>{
+    const siteNew=!existingSiteNames.has(r.site.toLowerCase());
+    const wardNew=r.ward && !existingWardKeys.has(wardKey(r.site,r.ward));
+    const status = r.ward ? `${siteNew?'New site':'Existing site'} · ${wardNew?'New ward':'Existing ward'}` : `${siteNew?'New site':'Existing site'} (no ward)`;
+    return `<tr><td>${esc(r.site)}</td><td>${esc(r.ward||'—')}</td><td>${esc(status)}</td></tr>`;
+  }).join('');
+  $('import-preview').innerHTML=`<table><thead><tr><th>Site</th><th>Ward</th><th>Status</th></tr></thead><tbody>${rowsHtml}</tbody></table>`;
+  $('import-preview').classList.remove('hidden'); $('import-actions').classList.remove('hidden');
+  $('import-summary').textContent=`${state.importRows.length} row(s) parsed`;
+}
+$('import-file').addEventListener('change', e=>{ const f=e.target.files[0]; if(f) parseImportFile(f); });
+const importDrop=$('import-drop');
+['dragenter','dragover'].forEach(evt=>importDrop.addEventListener(evt,e=>{e.preventDefault();importDrop.classList.add('drag');}));
+['dragleave','drop'].forEach(evt=>importDrop.addEventListener(evt,e=>{e.preventDefault();importDrop.classList.remove('drag');}));
+importDrop.addEventListener('drop', e=>{ const f=e.dataTransfer.files[0]; if(f) parseImportFile(f); });
+$('import-template-btn').addEventListener('click', ()=>{
+  const wb=XLSX.utils.book_new();
+  const ws=XLSX.utils.aoa_to_sheet([['Site','Ward'],['Worthing Hospital','Example Ward A'],['Worthing Hospital','Example Ward B'],["St Richard's Hospital",'']]);
+  XLSX.utils.book_append_sheet(wb,ws,'Sites and Wards'); XLSX.writeFile(wb,'sites-wards-template.xlsx');
+});
+$('import-commit-btn').addEventListener('click', async ()=>{
+  if(!state.importRows.length){toast('Nothing to import',true);return;}
+  const siteMap=new Map(state.sites.map(s=>[s.name.toLowerCase(),s.id]));
+  let added=0, skipped=0, failed=0;
+  for(const siteName of [...new Set(state.importRows.map(r=>r.site))]){
+    if(siteMap.has(siteName.toLowerCase())) continue;
+    const {data,error}=await sb.from('sites').insert({name:siteName,created_by:state.profile.id}).select('id,name').single();
+    if(error){ toast(`Site "${siteName}" failed: ${error.message}`,true); failed++; continue; }
+    siteMap.set(siteName.toLowerCase(),data.id); added++;
+  }
+  const wardKeySet=new Set(state.wards.map(w=>`${w.site_id}::${w.name.toLowerCase()}`));
+  for(const row of state.importRows){
+    if(!row.ward) continue;
+    const siteId=siteMap.get(row.site.toLowerCase()); if(!siteId){ skipped++; continue; }
+    const key=`${siteId}::${row.ward.toLowerCase()}`; if(wardKeySet.has(key)){ skipped++; continue; }
+    const {error}=await sb.from('wards').insert({site_id:siteId,name:row.ward});
+    if(error){ toast(`Ward "${row.ward}" failed: ${error.message}`,true); failed++; continue; }
+    wardKeySet.add(key); added++;
+  }
+  toast(`Import complete — ${added} added, ${skipped} already existed${failed?`, ${failed} failed`:''}`);
+  state.importRows=[]; $('import-preview').classList.add('hidden'); $('import-actions').classList.add('hidden'); $('import-file').value='';
+  await loadReference();
+});
+
+/* ---------- Audit ---------- */
+async function loadAudit(){
+  let q=sb.from('audit_log').select('*,profiles:actor_id(display_name)').order('created_at',{ascending:false}).limit(300);
+  const term=$('audit-search').value.trim(); if(term) q=q.ilike('hospital_number',`%${term.replace(/[%_,]/g,'')}%`);
+  const {data,error}=await q; if(error){toast(error.message,true);return;}
+  $('audit-body').innerHTML=(data||[]).map(a=>`<tr><td>${fmt(a.created_at)}</td><td>${esc(a.action)}</td><td>${esc(a.hospital_number||'—')}</td><td>${esc(a.entity_type)} ${esc(a.entity_id||'')}</td><td>${esc(a.profiles?.display_name||'—')}</td><td><code>${esc(JSON.stringify(a.details||{}))}</code></td></tr>`).join('')||'<tr><td colspan="6" class="muted">No audit entries.</td></tr>';
+}
+$('audit-search-btn').addEventListener('click',loadAudit);
+$('audit-search').addEventListener('keydown',e=>{if(e.key==='Enter')loadAudit();});
+$('audit-clear-btn').addEventListener('click',()=>{$('audit-search').value='';loadAudit();});
+// Exports the FULL audit log (not just the 300-row on-screen cap), paged
+// in batches of 1000 so it's genuinely everything, not a sample. Respects
+// the current hospital-number filter if one's set, same as the on-screen list.
+async function exportAuditToExcel(){
+  const term=$('audit-search').value.trim();
+  const pageSize=1000; let from=0; let allRows=[];
+  while(true){
+    let q=sb.from('audit_log').select('*,profiles:actor_id(display_name)').order('created_at',{ascending:false}).range(from, from+pageSize-1);
+    if(term) q=q.ilike('hospital_number',`%${term.replace(/[%_,]/g,'')}%`);
+    const {data,error}=await q;
+    if(error){ toast(error.message,true); return; }
+    if(!data || !data.length) break;
+    allRows=allRows.concat(data);
+    if(data.length<pageSize) break;
+    from+=pageSize;
+  }
+  if(!allRows.length){ toast('No audit entries to export',true); return; }
+  const rows=allRows.map(a=>({
+    Time: fmt(a.created_at),
+    Action: a.action,
+    'Hospital number': a.hospital_number||'',
+    'Entity type': a.entity_type,
+    'Entity ID': a.entity_id||'',
+    User: a.profiles?.display_name||'',
+    Details: JSON.stringify(a.details||{})
+  }));
+  const ws=XLSX.utils.json_to_sheet(rows);
+  ws['!cols']=[{wch:16},{wch:24},{wch:16},{wch:14},{wch:24},{wch:20},{wch:50}];
+  const wb=XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, 'Audit log');
+  const stamp=new Date().toISOString().slice(0,10);
+  XLSX.writeFile(wb, `audit-log-export-${stamp}.xlsx`);
+  toast(`Exported ${allRows.length} audit ${allRows.length===1?'entry':'entries'}`);
+}
+$('audit-export-btn').addEventListener('click', exportAuditToExcel);
+
+function subscribeRealtime(){
+  if(state.realtime) sb.removeChannel(state.realtime);
+  state.realtime=sb.channel('prescription-live')
+    .on('postgres_changes',{event:'*',schema:'public',table:'prescriptions'},()=>loadQueue())
+    .on('postgres_changes',{event:'*',schema:'public',table:'rp_sessions'},()=>loadRP())
+    .subscribe();
+}
+
+init();

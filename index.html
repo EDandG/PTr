@@ -1,0 +1,407 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="robots" content="noindex,nofollow" />
+  <title>Prescription Tracker by ED&amp;G&trade;</title>
+  <link rel="stylesheet" href="css/app.css" />
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; connect-src 'self' https://*.supabase.co wss://*.supabase.co; img-src 'self' data:; frame-ancestors 'none'; base-uri 'self'; form-action 'self'; object-src 'none'">
+  <script src="./vendor/supabase-js.min.js"></script>
+  <script src="./vendor/xlsx.full.min.js"></script>
+  <script src="./vendor/jszip.min.js"></script>
+  <script src="config.js"></script>
+</head>
+<body>
+  <div id="toast" class="toast hidden" role="status"></div>
+
+  <section id="login-screen" class="login-shell">
+    <div class="login-card">
+      <div class="brand-mark">RxT</div>
+      <h1>Prescription Tracker</h1>
+      <p class="brand-by">by ED&amp;G&trade;</p>
+      <p class="muted">Dispensary workflow, audit and turnaround visibility</p>
+      <form id="login-form" autocomplete="on">
+        <label>Username<input id="login-username" autocomplete="username" required /></label>
+        <label>Password<input id="login-password" type="password" autocomplete="current-password" required /></label>
+        <button class="btn primary full" type="submit">Sign in</button>
+      </form>
+      <p id="login-error" class="error-text"></p>
+    </div>
+  </section>
+
+  <section id="force-password-screen" class="login-shell hidden">
+    <div class="login-card">
+      <div class="brand-mark">RxT</div>
+      <h1>Set your password</h1>
+      <p class="muted">Your account is using a temporary password. Choose your own before continuing — this can't be skipped.</p>
+      <form id="force-password-form" autocomplete="on">
+        <label>New password<input id="force-password-new" type="password" autocomplete="new-password" minlength="12" required /></label>
+        <label>Confirm new password<input id="force-password-confirm" type="password" autocomplete="new-password" minlength="12" required /></label>
+        <p class="muted tiny">At least 12 characters, and different from the temporary one you just used.</p>
+        <button class="btn primary full" type="submit">Set password and continue</button>
+      </form>
+      <p id="force-password-error" class="error-text"></p>
+      <button id="force-password-signout" class="btn ghost full" type="button" style="margin-top:10px">Sign out instead</button>
+    </div>
+  </section>
+
+  <div id="app" class="app-shell hidden">
+    <header class="topbar">
+      <div class="brand-row"><div class="brand-mark small">RxT</div><div><strong>Prescription Tracker</strong><span class="brand-by-small">by ED&amp;G&trade;</span><span id="site-label" class="muted tiny"></span></div></div>
+      <div class="topbar-right"><span id="current-user"></span><span id="current-role" class="role-pill"></span><button id="logout-btn" class="btn ghost">Sign out</button></div>
+    </header>
+
+    <div id="rp-strip" class="rp-strip"></div>
+
+    <div id="tiles-trigger" class="tiles-trigger" aria-hidden="true"></div>
+    <aside id="tiles-flyout" class="tiles-flyout" aria-label="Queue summary">
+      <h3>Live queue summary <small class="tiles-hint-inline">— click to filter</small></h3>
+      <div class="summary-grid summary-grid-vertical">
+        <button type="button" class="summary-card summary-card-btn" data-filter-status="active"><span>Active</span><strong id="sum-active">0</strong></button>
+        <button type="button" class="summary-card summary-card-btn" data-filter-status="suspended"><span>Suspended</span><strong id="sum-suspended">0</strong></button>
+        <button type="button" class="summary-card summary-card-btn" data-filter-status="ready"><span>Ready</span><strong id="sum-ready">0</strong></button>
+        <button type="button" class="summary-card summary-card-btn" data-filter-status="overtarget"><span>Over target</span><strong id="sum-red">0</strong></button>
+      </div>
+      <h3 style="margin-top:16px">By type <small class="tiles-hint-inline">— click to jump</small></h3>
+      <div id="tiles-by-type" class="tiles-by-type"></div>
+      <h3 style="margin-top:16px">By site <small class="tiles-hint-inline">— click to filter</small></h3>
+      <div id="tiles-by-site" class="tiles-by-type"></div>
+    </aside>
+
+    <nav class="tabs" aria-label="Primary">
+      <button class="tab active" data-view="dashboard">Live queue</button>
+      <button class="tab" data-view="new">Book in</button>
+      <button class="tab" data-view="history">History</button>
+      <button class="tab perm-users hidden" data-view="users">Users</button>
+      <button class="tab perm-config hidden" data-view="settings">Configuration</button>
+      <button class="tab perm-audit hidden" data-view="audit">Audit</button>
+    </nav>
+
+    <main>
+      <section id="view-dashboard" class="view active-view">
+        <div class="page-head"><div><h2>Live queue</h2><p class="muted">Current dispensary workload — move your mouse to the left edge for the summary</p></div><div class="filters"><select id="dispensary-filter"></select><button id="refresh-btn" class="btn secondary">Refresh</button></div></div>
+        <div id="pressure-banner" class="pressure-banner hidden"></div>
+        <div class="queue-toolbar">
+          <div class="rx-tabs" id="category-tabs">
+            <button type="button" class="rx-tab active" data-category="">All types</button>
+            <button type="button" class="rx-tab" data-category="inpatient">Inpatient</button>
+            <button type="button" class="rx-tab" data-category="tto">TTO</button>
+          </div>
+          <input id="queue-search" placeholder="Search by hospital number" />
+        </div>
+        <div id="active-filter-bar" class="active-filter-bar hidden"><span id="active-filter-text"></span><button id="clear-filter-btn" class="btn ghost" type="button">Clear filter</button></div>
+        <div class="table-card dense"><table class="dense"><thead><tr><th>ID</th><th>Flags</th><th>Hospital no.</th><th>Ward</th><th>Type</th><th>Items</th><th>Stage</th><th>Elapsed</th></tr></thead><tbody id="queue-body"></tbody></table></div>
+      </section>
+
+      <section id="view-new" class="view">
+        <div class="page-head"><div><h2>Book in prescription</h2><p class="muted">Create a new tracked prescription</p></div></div>
+        <form id="book-form" class="panel form-grid">
+          <label class="span-2">Dispensary<select id="book-dispensary" required></select></label>
+          <label>Ward<select id="book-ward"><option value="">Select a ward…</option></select></label>
+          <label>Hospital / unit<select id="book-site" required><option value="" disabled selected>Select hospital/unit…</option></select></label>
+          <label>Hospital number<input id="book-hn" maxlength="64" required /></label>
+          <div id="book-hn-warning" class="hn-warning span-2 hidden"></div>
+          <label>Patient initials<input id="book-initials" maxlength="12" placeholder="Optional" /></label>
+          <label>Prescription type<select id="book-type" required></select></label>
+          <label>Number of items<input id="book-items" type="number" min="0" max="200" /></label>
+          <label class="span-2">Needed by
+            <input id="book-needed-by" type="datetime-local" />
+          </label>
+          <label class="span-2">Flags <span class="muted tiny">optional — attach an attention flag</span><div id="book-flags" class="flag-picker"></div></label>
+          <label class="span-2">Notes<textarea id="book-notes" rows="3" maxlength="1000" placeholder="Avoid clinical information unless operationally necessary"></textarea></label>
+          <div class="span-2"><button class="btn primary" type="submit">Book in prescription</button></div>
+        </form>
+      </section>
+
+      <section id="view-history" class="view">
+        <div class="page-head"><div><h2>History</h2><p class="muted">Search tracked prescriptions</p></div></div>
+        <div class="panel search-row"><input id="history-search" placeholder="Hospital number" /><select id="history-state"><option value="">All states</option><option>active</option><option>suspended</option><option>ready</option><option>collected</option><option>dispatched</option><option>cancelled</option></select><button id="history-btn" class="btn secondary">Search</button></div>
+        <div class="table-card"><table><thead><tr><th>ID</th><th>Hospital no.</th><th>Ward</th><th>State</th><th>Stage</th><th>Received</th></tr></thead><tbody id="history-body"></tbody></table></div>
+      </section>
+
+      <section id="view-users" class="view">
+        <div class="page-head"><div><h2>Users control panel</h2><p class="muted">Accounts, dispensary access and tickbox permissions — everything starts switched off</p></div><div class="filters"><input id="user-search" class="user-search-input" placeholder="Search by name or username…" /><button id="user-search-clear" class="btn ghost" type="button">Clear</button><span id="user-search-count" class="muted tiny"></span></div></div>
+        <form id="create-user-form" class="panel form-grid">
+          <label>Username<input id="user-username" minlength="3" required /></label>
+          <label>Display name<input id="user-display" required /></label>
+          <label>Role<select id="user-role"><option value="assistant">Pharmacy Assistant</option><option value="technician">Pharmacy Technician</option><option value="pharmacist">Pharmacist</option><option value="admin">Admin</option><option value="governance">Governance</option></select></label>
+          <label>Initial password<input id="user-password" type="password" minlength="12" required /></label>
+          <label>GPhC number <small class="muted" id="user-gphc-hint">(required for Pharmacist accounts)</small><input id="user-gphc" pattern="[0-9]{6,8}" maxlength="8" placeholder="e.g. 2069123" /></label>
+          <fieldset class="span-2"><legend>Dispensary access</legend><div id="user-dispensaries" class="checkbox-grid"></div></fieldset>
+          <fieldset class="span-2"><legend>Permissions — all off by default</legend>
+            <p class="perm-note">Tick only what this person needs. Nothing here is inferred from the role above, except where noted.</p>
+            <div class="perm-grid" id="user-perms-clinical"></div>
+            <p class="perm-role-note" id="user-role-note"></p>
+          </fieldset>
+          <div class="span-2"><button class="btn primary" type="submit">Create user</button></div>
+        </form>
+        <div class="table-card"><table><thead><tr><th>Username</th><th>Name</th><th>Role</th><th>GPhC no.</th><th>Active</th><th>Permissions</th><th></th></tr></thead><tbody id="users-body"></tbody></table></div>
+      </section>
+
+      <section id="view-settings" class="view">
+        <div class="page-head"><div><h2>Configuration</h2><p class="muted">Dispensaries, sites, wards, prescription types and reasons</p></div></div>
+
+        <div class="config-tabs">
+          <button type="button" class="config-tab active" data-config-tab="dispensaries">Dispensaries</button>
+          <button type="button" class="config-tab" data-config-tab="sites">Sites</button>
+          <button type="button" class="config-tab" data-config-tab="wards">Wards</button>
+          <button type="button" class="config-tab" data-config-tab="coverage">Coverage &amp; import</button>
+          <button type="button" class="config-tab" data-config-tab="types">Prescription types</button>
+          <button type="button" class="config-tab" data-config-tab="reasons">Reasons</button>
+          <button type="button" class="config-tab" data-config-tab="flags">Flags</button>
+          <button type="button" class="config-tab" data-config-tab="pressure">Pressure thresholds</button>
+          <button type="button" class="config-tab danger-tab hidden" data-config-tab="danger">Danger zone</button>
+        </div>
+
+        <div id="config-tab-dispensaries" class="config-tab-panel">
+          <div class="panel">
+            <h3>Add dispensary</h3>
+            <p class="muted tiny">Start here — a dispensary can serve more than one site, so it isn't tied to one at creation. Link them under "Coverage &amp; import" once both exist.</p>
+            <form id="disp-form" class="filters"><input id="disp-name" placeholder="Dispensary name" required /><button class="btn secondary" type="submit">Add dispensary</button></form>
+          </div>
+          <div class="panel" style="margin-top:16px">
+            <h3>Dispensaries</h3>
+            <p class="muted tiny">Edit a name and click Save.</p>
+            <div class="table-card"><table><thead><tr><th>Name</th><th></th></tr></thead><tbody id="disp-list-body"></tbody></table></div>
+          </div>
+        </div>
+
+        <div id="config-tab-sites" class="config-tab-panel hidden">
+          <div class="panel">
+            <h3>Add site</h3>
+            <p class="muted tiny">A hospital, unit, or any other location prescriptions are booked to.</p>
+            <form id="site-form" class="filters"><input id="site-name" placeholder="Site name" required /><button class="btn secondary" type="submit">Add site</button></form>
+          </div>
+          <div class="panel" style="margin-top:16px">
+            <h3>Sites</h3>
+            <p class="muted tiny">Edit a name and click Save.</p>
+            <div class="table-card"><table><thead><tr><th>Name</th><th></th></tr></thead><tbody id="site-list-body"></tbody></table></div>
+          </div>
+        </div>
+
+        <div id="config-tab-wards" class="config-tab-panel hidden">
+          <div class="panel">
+            <h3>Add ward / location</h3>
+            <form id="ward-form" class="filters"><select id="ward-site" required></select><input id="ward-name" placeholder="Ward name" required /><button class="btn secondary" type="submit">Add ward</button></form>
+          </div>
+          <div class="panel" style="margin-top:16px">
+            <h3>Wards</h3>
+            <p class="muted tiny">Edit a name and click Save. Hide removes a ward from the booking dropdown without losing its history; Delete is permanent and is refused if prescriptions exist against it.</p>
+            <div class="table-card"><table><thead><tr><th>Site</th><th>Ward</th><th>Status</th><th></th></tr></thead><tbody id="ward-list-body"></tbody></table></div>
+          </div>
+        </div>
+
+        <div id="config-tab-coverage" class="config-tab-panel hidden">
+          <div class="panel">
+            <h3>Dispensary ↔ site coverage</h3>
+            <p class="muted tiny">Tick every hospital a dispensary serves — saved immediately per tick. Coverage is by hospital, not by individual ward: ticking a hospital serves every ward under it automatically, including ones added later.</p>
+            <div class="table-card" id="disp-sites-wrap"><table id="disp-sites-table"><thead><tr><th>Dispensary</th></tr></thead><tbody id="disp-sites-body"></tbody></table></div>
+          </div>
+
+          <div class="panel" style="margin-top:16px">
+            <h3>Import sites &amp; wards from Excel</h3>
+            <p class="muted tiny">Two columns: <strong>Site</strong> (hospital name) and <strong>Ward</strong>. One row per ward. A site with no wards can appear once with the ward column blank. Existing sites/wards with matching names are left alone.</p>
+            <div class="filters" style="margin:10px 0">
+              <input id="import-file" type="file" accept=".xlsx,.xls,.csv" />
+              <button id="import-template-btn" class="btn ghost" type="button">Download template</button>
+            </div>
+            <div id="import-drop" class="import-drop">Drop a spreadsheet here, or use the file picker above</div>
+            <div id="import-preview" class="import-preview hidden"></div>
+            <div id="import-actions" class="filters hidden" style="margin-top:10px">
+              <button id="import-commit-btn" class="btn primary" type="button">Import rows</button>
+              <span id="import-summary" class="muted tiny"></span>
+            </div>
+          </div>
+        </div>
+
+        <div id="config-tab-types" class="config-tab-panel hidden">
+          <div class="panel">
+            <h3>Prescription types</h3>
+            <p class="muted tiny">Not a fixed list — create, retarget or retire types here. "Pre-screened" types skip straight to Awaiting Labelling and Assembly when booked in; anything else enters at Awaiting Screening first. Each type carries its own turnaround target (one KPI per type, in hours and minutes) rather than a per-line rule. Tick "TTO"/"Inpatient" so the live queue's view switcher knows which category this type belongs to.</p>
+            <form id="ptype-form" class="form-grid" style="margin-bottom:14px">
+              <label>Name<input id="ptype-name" required /></label>
+              <label class="check-label"><input id="ptype-prescreened" type="checkbox" /> Pre-screened (skips Awaiting Screening)</label>
+              <label class="check-label"><input id="ptype-tto" type="checkbox" /> TTO category</label>
+              <label class="check-label"><input id="ptype-inpatient" type="checkbox" /> Inpatient category</label>
+              <label class="check-label"><input id="ptype-collected" type="checkbox" checked /> Enable "Mark collected" step</label>
+              <label class="check-label"><input id="ptype-dispatched" type="checkbox" /> Enable "Mark dispatched" step</label>
+              <label>Turns amber after<span class="filters"><input type="number" min="0" id="ptype-amber-h" placeholder="h" style="width:56px">h <input type="number" min="0" max="59" id="ptype-amber-m" placeholder="m" style="width:56px">m</span></label>
+              <label>Turns red after<span class="filters"><input type="number" min="0" id="ptype-red-h" placeholder="h" style="width:56px">h <input type="number" min="0" max="59" id="ptype-red-m" placeholder="m" style="width:56px">m</span></label>
+              <div class="span-2"><button class="btn primary" type="submit">Add prescription type</button></div>
+            </form>
+            <div class="table-card"><table class="ptype-table">
+              <thead>
+                <tr>
+                  <th rowspan="2">Type</th>
+                  <th colspan="3" class="group-col">Category &amp; routing</th>
+                  <th colspan="2" class="group-col">Completion step</th>
+                  <th colspan="2" class="group-col">Turnaround target</th>
+                  <th rowspan="2">Default</th>
+                  <th rowspan="2"></th>
+                </tr>
+                <tr>
+                  <th>Pre-screened</th><th>TTO</th><th>Inpatient</th>
+                  <th>Collected</th><th>Dispatched</th>
+                  <th>Amber after</th><th>Red after</th>
+                </tr>
+              </thead>
+              <tbody id="ptype-body"></tbody></table></div>
+          </div>
+        </div>
+
+        <div id="config-tab-reasons" class="config-tab-panel hidden">
+          <div class="panel">
+            <h3>Suspension reasons</h3>
+            <p class="muted tiny">Fully editable — the dropdown always lists these alphabetically. Only "Other" is fixed in the app itself (it's what triggers the free-text box); it can't be removed.</p>
+            <form id="reason-form" class="filters" style="margin-bottom:12px"><input id="reason-name" placeholder="New reason" required /><input id="reason-emoji" maxlength="8" placeholder="Emoji" style="width:90px" /><input id="reason-image" type="file" accept="image/png,image/svg+xml,image/webp" /><input id="reason-colour" type="color" value="#6855b6" /><button class="btn secondary" type="submit">Add reason</button></form>
+            <p class="muted tiny">An icon is optional. Emoji show in the suspend dropdown itself; uploaded images can't render inside a native dropdown, so those appear on the queue row and prescription popup instead.</p>
+            <div class="table-card"><table><thead><tr><th>Icon</th><th>Reason</th><th>Colour</th><th></th></tr></thead><tbody id="reason-body"></tbody></table></div>
+          </div>
+
+          <div class="panel" style="margin-top:16px">
+            <h3>Correction reasons</h3>
+            <p class="muted tiny">Shown when a pharmacist sends a prescription back for correction from Awaiting final check, instead of marking it Checked.</p>
+            <form id="correction-reason-form" class="filters" style="margin-bottom:12px"><input id="correction-reason-name" placeholder="New reason" required /><input id="correction-reason-emoji" maxlength="8" placeholder="Emoji" style="width:90px" /><input id="correction-reason-image" type="file" accept="image/png,image/svg+xml,image/webp" /><input id="correction-reason-colour" type="color" value="#bf3b32" /><button class="btn secondary" type="submit">Add reason</button></form>
+            <div class="table-card"><table><thead><tr><th>Icon</th><th>Reason</th><th>Colour</th><th></th></tr></thead><tbody id="correction-reason-body"></tbody></table></div>
+          </div>
+        </div>
+
+        <div id="config-tab-flags" class="config-tab-panel hidden">
+          <div class="panel">
+            <h3>Prescription flags — superuser only</h3>
+            <p class="muted tiny">Attention flags staff can attach to a prescription — e.g. "Fridge item", "Controlled drug", "Transport required". Each needs a label and either an emoji or a small PNG/SVG icon. Images are stored inside the database as data URIs, so keep them small icons (64KB max, enforced by the database) — a large image would be sent with every queue row for every user.</p>
+            <form id="flag-form" class="form-grid" style="margin-bottom:14px">
+              <label>Label<input id="flag-name" placeholder="e.g. Fridge item" required /></label>
+              <label>Emoji <span class="muted tiny">(or upload an image instead)</span><input id="flag-emoji" maxlength="8" placeholder="e.g. ❄️" /></label>
+              <label>Or image file <span class="muted tiny">PNG/SVG, small icon</span><input id="flag-image" type="file" accept="image/png,image/svg+xml,image/webp" /></label>
+              <label>Badge colour<input id="flag-colour" type="color" value="#0c5cab" /></label>
+              <div class="span-2">
+                <div id="flag-preview" class="flag-preview hidden"></div>
+                <button class="btn primary" type="submit">Add flag</button>
+              </div>
+            </form>
+            <div class="table-card"><table><thead><tr><th>Icon</th><th>Label</th><th>Colour</th><th>Order</th><th></th></tr></thead><tbody id="flag-body"></tbody></table></div>
+
+            <div class="bulk-import">
+              <h4>Bulk import icons</h4>
+              <p class="muted tiny">Upload a <strong>.zip of images</strong>, or select several image files at once. Each file becomes a flag, with its label taken from the filename — <code>flag-cold-chain.png</code> becomes "Cold chain". Files already matching an existing flag name are skipped, so you can re-upload the same zip after adding new icons to it. Anything over 48KB, or not an image, is reported and skipped.</p>
+              <div class="filters" style="margin-top:10px">
+                <input id="flag-bulk-file" type="file" accept=".zip,image/png,image/svg+xml,image/webp" multiple />
+                <button id="flag-bulk-btn" class="btn primary" type="button">Import icons</button>
+              </div>
+              <div id="flag-bulk-report" class="import-preview hidden"></div>
+            </div>
+          </div>
+        </div>
+
+        <div id="config-tab-pressure" class="config-tab-panel hidden">
+          <div class="panel">
+            <h3>Pressure thresholds — superuser only</h3>
+            <p class="muted tiny">How many items waiting at a stage counts as amber or red, shown on the live queue as a pressure indicator so staff can see where help is needed, not just "we're busy". Counts active (non-suspended) items only.</p>
+            <div class="table-card"><table><thead><tr><th>Stage</th><th>Amber at</th><th>Red at</th><th></th></tr></thead><tbody id="pressure-body"></tbody></table></div>
+          </div>
+        </div>
+
+        <div id="config-tab-danger" class="config-tab-panel hidden">
+          <div id="danger-zone" class="panel danger-zone hidden">
+            <h3>Danger zone — superuser only</h3>
+            <p class="muted tiny">Wipes every prescription, its full history, and the audit log. Sites, dispensaries, wards, prescription types, suspension reasons and user accounts are <strong>not</strong> touched. For pre-go-live testing only — there is no undo, and this contradicts "nothing is ever deleted" everywhere else in this app on purpose.</p>
+            <button id="clear-data-toggle-btn" class="btn danger" type="button">Clear all prescription data and logs…</button>
+            <div id="clear-data-confirm" class="filters hidden" style="margin-top:10px">
+              <input id="clear-data-phrase" placeholder='Type CLEAR ALL DATA to confirm' />
+              <button id="clear-data-confirm-btn" class="btn danger" type="button">Confirm — wipe everything</button>
+              <button id="clear-data-cancel-btn" class="btn ghost" type="button">Cancel</button>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section id="view-audit" class="view">
+        <div class="page-head"><div><h2>Audit log</h2><p class="muted">Administrative and clinical activity, by hospital number</p></div></div>
+        <div class="panel search-row"><input id="audit-search" placeholder="Filter by hospital number" /><button id="audit-search-btn" class="btn secondary">Filter</button><button id="audit-clear-btn" class="btn ghost">Clear</button><button id="audit-export-btn" class="btn primary" type="button">Export to Excel</button></div>
+        <div class="table-card"><table><thead><tr><th>Time</th><th>Action</th><th>Hospital no.</th><th>Entity</th><th>User</th><th>Details</th></tr></thead><tbody id="audit-body"></tbody></table></div>
+      </section>
+    </main>
+  </div>
+
+  <dialog id="rx-dialog">
+    <div class="dialog-head"><div><h2 id="rx-title">Prescription</h2><p id="rx-subtitle" class="muted"></p></div><button id="rx-close" class="icon-btn" aria-label="Close"><svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor"><path d="M18.3 5.71 12 12.01l-6.3-6.3-1.4 1.42 6.29 6.29-6.3 6.3 1.42 1.41 6.29-6.3 6.3 6.3 1.41-1.41-6.3-6.3 6.3-6.29z"/></svg></button></div>
+    <div id="rx-facts" class="rx-facts"></div>
+
+    <div class="rx-tabs">
+      <button type="button" class="rx-tab active" data-rx-tab="details">Details</button>
+      <button type="button" class="rx-tab" data-rx-tab="timeline">Timeline</button>
+    </div>
+
+    <div id="rx-tab-details" class="rx-tab-panel">
+      <div id="rx-stepper" class="rx-stepper"></div>
+      <div class="rx-actions-wrap">
+        <div id="rx-actions" class="rx-actions-row"></div>
+        <div id="rx-confirm-pop" class="rx-confirm-pop hidden">
+          <p id="rx-confirm-text"></p>
+          <div class="row"><button id="rx-confirm-yes" type="button" class="rx-confirm-btn">Confirm</button><button id="rx-confirm-no" type="button" class="rx-confirm-cancel">Cancel</button></div>
+        </div>
+      </div>
+      <div id="suspend-panel" class="panel compact hidden"><h3>Suspend prescription</h3><div class="search-row"><select id="suspend-reason"></select><input id="suspend-note" placeholder="Note (required if 'Other')" /><button id="suspend-btn" class="btn danger">Suspend</button></div></div>
+      <div id="correction-send-panel" class="panel compact hidden"><h3>Send back for correction</h3><div class="search-row"><select id="correction-send-reason"></select><input id="correction-send-note" placeholder="Note (optional)" /><button id="correction-send-btn" class="btn danger">Send back</button></div></div>
+      <details class="rx-more">
+        <summary>More options</summary>
+        <button id="flags-toggle-btn" class="btn ghost hidden" type="button">Change flags…</button>
+        <div id="flags-panel" class="panel compact hidden">
+          <h3>Flags</h3>
+          <div id="rx-flag-picker" class="flag-picker"></div>
+          <button id="flags-save-btn" class="btn secondary" type="button" style="margin-top:10px">Save flags</button>
+        </div>
+        <button id="destination-toggle-btn" class="btn ghost hidden" type="button">Change ward / hospital destination…</button>
+        <div id="destination-panel" class="panel compact hidden">
+          <h3>Change ward / hospital destination</h3>
+          <div class="form-grid">
+            <label>Ward<select id="destination-ward"><option value="">Select a ward…</option></select></label>
+            <label>Hospital / unit<select id="destination-site" required><option value="" disabled selected>Select hospital/unit…</option></select></label>
+            <div class="span-2"><button id="destination-save-btn" class="btn secondary" type="button">Save new destination</button></div>
+          </div>
+        </div>
+        <button id="cancel-toggle-btn" class="btn ghost hidden" type="button">Cancel prescription…</button>
+        <div id="cancel-panel" class="panel compact hidden">
+          <h3>Cancel prescription</h3>
+          <div class="search-row"><input id="cancel-reason" placeholder="Reason for cancellation" /><button id="cancel-confirm-btn" class="btn danger">Confirm cancel</button></div>
+        </div>
+      </details>
+    </div>
+
+    <div id="rx-tab-timeline" class="rx-tab-panel hidden">
+      <div id="timeline" class="timeline"></div>
+    </div>
+  </dialog>
+
+  <dialog id="temp-password-dialog">
+    <div class="dialog-head"><div><h2>Temporary password</h2><p id="temp-password-for" class="muted"></p></div></div>
+    <p class="muted tiny">Copy this now and hand it to them directly — it is not stored anywhere and can't be shown again. They'll be required to set their own password the next time they sign in, before they can use the app.</p>
+    <div class="temp-password-box"><code id="temp-password-value"></code></div>
+    <div class="filters" style="margin-top:12px">
+      <button id="temp-password-copy" class="btn primary" type="button">Copy to clipboard</button>
+      <button id="temp-password-close" class="btn ghost" type="button">Done</button>
+    </div>
+  </dialog>
+
+  <dialog id="manage-user-dialog">
+    <div class="dialog-head"><div><h2>Manage user</h2><p id="manage-user-name" class="muted"></p></div><button id="manage-user-close" class="icon-btn" aria-label="Close"><svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor"><path d="M18.3 5.71 12 12.01l-6.3-6.3-1.4 1.42 6.29 6.29-6.3 6.3 1.42 1.41 6.29-6.3 6.3 6.3 1.41-1.41-6.3-6.3 6.3-6.29z"/></svg></button></div>
+    <form id="manage-user-form" class="form-grid">
+      <label>Display name<input id="mu-display" required /></label>
+      <label>Role<select id="mu-role"><option value="assistant">Pharmacy Assistant</option><option value="technician">Pharmacy Technician</option><option value="pharmacist">Pharmacist</option><option value="admin">Admin</option><option value="governance">Governance</option></select></label>
+      <label class="check-label"><input id="mu-active" type="checkbox" /> Active</label>
+      <label>Reset password <small class="muted">(optional, 12+ characters)</small><input id="mu-password" type="password" minlength="12" /></label>
+      <label>GPhC number <small class="muted" id="mu-gphc-hint">(required for Pharmacist accounts)</small><input id="mu-gphc" pattern="[0-9]{6,8}" maxlength="8" placeholder="e.g. 2069123" /></label>
+      <fieldset class="span-2"><legend>Dispensary access</legend><div id="mu-dispensaries" class="checkbox-grid"></div></fieldset>
+      <fieldset class="span-2"><legend>Permissions</legend>
+        <div class="perm-grid" id="mu-perms-clinical"></div>
+        <p class="perm-role-note" id="mu-role-note"></p>
+      </fieldset>
+      <div class="span-2"><button class="btn primary" type="submit">Save changes</button></div>
+    </form>
+  </dialog>
+
+  <script src="js/app.js"></script>
+</body>
+</html>
