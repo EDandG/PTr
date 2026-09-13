@@ -1664,10 +1664,12 @@ async function deactivateFlag(id){
 // Selection lives in this Map rather than in the DOM, so the chips and
 // the filtered option list can re-render freely without losing state.
 const flagSelections = new Map();   // containerId -> Set of flag ids
+const pendingRemoval = new Map();   // containerId -> flag id awaiting Remove/Cancel
 
 function renderFlagPicker(containerId, selectedIds=[]){
   const box=$(containerId); if(!box) return;
   flagSelections.set(containerId, new Set(selectedIds));
+  pendingRemoval.delete(containerId);
   if(!state.prescriptionFlags.length){
     box.innerHTML='<span class="muted tiny">No flags configured yet — add some in Configuration → Flags.</span>';
     return;
@@ -1694,7 +1696,19 @@ function renderFlagPicker(containerId, selectedIds=[]){
     const box2 = box.querySelector('[data-role=chosen]');
     const picked = state.prescriptionFlags.filter(f=>chosen.has(f.id));
     box2.innerHTML = picked.length
-      ? picked.map(f=>`<span class="flag-chip" style="border-color:${esc(f.colour||'#0c5cab')};color:${esc(f.colour||'#0c5cab')}">${flagIconHtml(f,14)} ${esc(f.name)}<button type="button" class="flag-chip-x" data-remove-flag="${f.id}" aria-label="Remove ${esc(f.name)}">&times;</button></span>`).join('')
+      ? picked.map(f=>{
+          const col = esc(f.colour||'#0c5cab');
+          // A chip awaiting confirmation swaps to Remove/Cancel rather than
+          // vanishing on a single click - removing a flag someone else put
+          // on deliberately (a CD or fridge marker) shouldn't be a
+          // one-click accident.
+          if(pendingRemoval.get(containerId) === f.id){
+            return `<span class="flag-chip is-confirming" style="border-color:${col};color:${col}">${flagIconHtml(f,14)} ${esc(f.name)}
+              <button type="button" class="flag-chip-confirm" data-confirm-remove="${f.id}">Remove</button>
+              <button type="button" class="flag-chip-cancel" data-cancel-remove="1">Cancel</button></span>`;
+          }
+          return `<span class="flag-chip" style="border-color:${col};color:${col}">${flagIconHtml(f,14)} ${esc(f.name)}<button type="button" class="flag-chip-x" data-remove-flag="${f.id}" aria-label="Remove ${esc(f.name)}">&times;</button></span>`;
+        }).join('')
       : '<span class="muted tiny">None selected</span>';
   };
   const repaint = ()=>{ paintChosen(); paintOptions(); };
@@ -1702,12 +1716,17 @@ function renderFlagPicker(containerId, selectedIds=[]){
   box.addEventListener('click', (ev)=>{
     const opt = ev.target.closest('[data-flag-id]');
     const rm  = ev.target.closest('[data-remove-flag]');
+    const ok  = ev.target.closest('[data-confirm-remove]');
+    const no  = ev.target.closest('[data-cancel-remove]');
     const chosen = flagSelections.get(containerId);
-    if(rm){ ev.preventDefault(); chosen.delete(rm.dataset.removeFlag); repaint(); return; }
+    if(no){ ev.preventDefault(); pendingRemoval.delete(containerId); repaint(); return; }
+    if(ok){ ev.preventDefault(); chosen.delete(ok.dataset.confirmRemove); pendingRemoval.delete(containerId); repaint(); return; }
+    if(rm){ ev.preventDefault(); pendingRemoval.set(containerId, rm.dataset.removeFlag); repaint(); return; }
     if(opt){
       ev.preventDefault();
       // Clicking a selected option toggles it off, so the dropdown itself
       // can remove as well as add.
+      pendingRemoval.delete(containerId);
       if(chosen.has(opt.dataset.flagId)) chosen.delete(opt.dataset.flagId);
       else chosen.add(opt.dataset.flagId);
       repaint(); search.focus(); return;

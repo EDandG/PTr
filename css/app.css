@@ -416,8 +416,18 @@ input[type=color]::-moz-color-swatch{border:0;border-radius:2px}
 .flag-select{position:relative;border:1px solid var(--line);border-radius:3px;background:#fff;padding:8px}
 .flag-chosen{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:8px;min-height:24px;align-items:center}
 .flag-chip{display:inline-flex;align-items:center;gap:6px;border:1px solid;border-radius:20px;padding:3px 6px 3px 10px;font-size:12px;font-weight:800;background:#fff}
-.flag-chip-x{border:0;background:transparent;color:inherit;font-size:16px;line-height:1;cursor:pointer;padding:0 4px;opacity:.65}
-.flag-chip-x:hover{opacity:1}
+/* The × stays hidden until the chip is hovered or keyboard-focused, so a
+   row of chips reads cleanly rather than as a row of delete buttons.
+   focus-within keeps it reachable without a mouse. */
+.flag-chip-x{border:0;background:transparent;color:inherit;font-size:16px;line-height:1;cursor:pointer;padding:0 4px;opacity:0;width:0;overflow:hidden;transition:opacity .12s ease}
+.flag-chip:hover .flag-chip-x,.flag-chip:focus-within .flag-chip-x{opacity:.7;width:auto}
+.flag-chip:hover .flag-chip-x:hover{opacity:1}
+/* Confirm state: the chip widens to offer Remove / Cancel instead of
+   disappearing on a single click. */
+.flag-chip.is-confirming{background:#fffaf2;border-style:dashed}
+.flag-chip-confirm,.flag-chip-cancel{border:0;border-radius:12px;font:inherit;font-size:11px;font-weight:800;padding:3px 9px;cursor:pointer;margin-left:4px}
+.flag-chip-confirm{background:var(--red);color:#fff}
+.flag-chip-cancel{background:#e9eef4;color:var(--navy-deep)}
 .flag-search{width:100%;border:0;border-top:1px solid var(--line);padding:8px 4px 2px;outline:none;font:inherit}
 .flag-options{position:absolute;left:0;right:0;top:100%;z-index:20;background:#fff;border:1px solid var(--line);border-radius:3px;box-shadow:0 12px 28px rgba(4,37,75,.18);max-height:240px;overflow-y:auto;margin-top:4px}
 .flag-opt{display:flex;align-items:center;gap:8px;width:100%;border:0;background:transparent;padding:9px 12px;font:inherit;font-size:13px;font-weight:700;color:var(--navy-deep);cursor:pointer;text-align:left}
