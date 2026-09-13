@@ -162,7 +162,8 @@ setInterval(checkAccountStillValid, 60000);
 window.addEventListener('focus', checkAccountStillValid);
 
 let queueTickTimer=null;
-function showLogin(){ state.session=null; state.profile=null; if(queueTickTimer){ clearInterval(queueTickTimer); queueTickTimer=null; } $('app').classList.add('hidden'); $('force-password-screen').classList.add('hidden'); $('login-screen').classList.remove('hidden'); }
+function showLogin(){ state.session=null; state.profile=null;
+  document.querySelectorAll('.perm-users,.perm-config,.perm-audit').forEach(x=>x.classList.add('hidden')); if(queueTickTimer){ clearInterval(queueTickTimer); queueTickTimer=null; } $('app').classList.add('hidden'); $('force-password-screen').classList.add('hidden'); $('login-screen').classList.remove('hidden'); }
 // Shown instead of the app when the account is on a temporary password.
 // This screen is a courtesy, not the enforcement: every permission helper
 // in the database returns false while must_change_password is set, so an
@@ -211,9 +212,25 @@ async function enterApp(session){
   state.profile=profile; $('login-screen').classList.add('hidden'); $('force-password-screen').classList.add('hidden'); $('app').classList.remove('hidden');
   $('current-user').textContent=profile.display_name;
   $('current-role').textContent=profile.is_superuser?'Superuser':(ROLE_LABELS[profile.role]||profile.role);
+  // SECURITY: re-hide every permission-gated element FIRST, then reveal
+  // only what this account is entitled to. Previously these lines only
+  // ever removed 'hidden' and nothing put it back - so if an admin signed
+  // in, signed out, and a technician then signed in on the same browser
+  // without a page refresh, the admin's Users/Configuration/Audit tabs
+  // were still revealed for the technician. The database still refused
+  // every action and never exposed another user's row, but the panels
+  // were visible, which is wrong on its own terms. Shared dispensary
+  // workstations make that sequence completely routine.
+  document.querySelectorAll('.perm-users,.perm-config,.perm-audit').forEach(x=>x.classList.add('hidden'));
   if(can('perm_manage_users')) document.querySelectorAll('.perm-users').forEach(x=>x.classList.remove('hidden'));
   if(can('perm_manage_config')) document.querySelectorAll('.perm-config').forEach(x=>x.classList.remove('hidden'));
   if(can('perm_view_audit')) document.querySelectorAll('.perm-audit').forEach(x=>x.classList.remove('hidden'));
+  // Always land on the Live queue after any sign-in, so a previously
+  // selected admin view can't persist across an account change either.
+  document.querySelectorAll('.tab').forEach(t=>t.classList.remove('active'));
+  document.querySelectorAll('.view').forEach(v=>v.classList.remove('active-view'));
+  document.querySelector('[data-view="dashboard"]').classList.add('active');
+  $('view-dashboard').classList.add('active-view');
   initPermGrids();
   await loadReference(); await loadQueue(); await loadRP(); await loadPressure(); subscribeRealtime();
   setInterval(()=>{ if(state.profile) loadPressure(); }, 60000);
