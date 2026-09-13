@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <meta name="robots" content="noindex,nofollow" />
   <title>Prescription Tracker by ED&amp;G&trade;</title>
-  <link rel="stylesheet" href="css/app.css?v=2.27" />
+  <link rel="stylesheet" href="css/app.css?v=2.30" />
   <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; connect-src 'self' https://*.supabase.co wss://*.supabase.co; img-src 'self' data:; frame-ancestors 'none'; base-uri 'self'; form-action 'self'; object-src 'none'">
   <script src="./vendor/supabase-js.min.js"></script>
   <script src="./vendor/xlsx.full.min.js"></script>
@@ -270,7 +270,7 @@
         <div id="config-tab-flags" class="config-tab-panel hidden">
           <div class="panel">
             <h3>Prescription flags — superuser only</h3>
-            <p class="muted tiny">Attention flags staff can attach to a prescription — e.g. "Fridge item", "Controlled drug", "Transport required". Each needs a label and either an emoji or a small PNG/SVG icon. Images are stored inside the database as data URIs, so keep them small icons (64KB max, enforced by the database) — a large image would be sent with every queue row for every user.</p>
+            <p class="muted tiny">Attention flags staff can attach to a prescription — e.g. "Fridge item", "Controlled drug", "Transport required". Each needs a label and either an emoji or a small PNG/SVG icon. "Display order" just controls the sequence they appear in — lowest first. Images are stored inside the database as data URIs, so keep them small icons (64KB max, enforced by the database) — a large image would be sent with every queue row for every user.</p>
             <form id="flag-form" class="form-grid" style="margin-bottom:14px">
               <label>Label<input id="flag-name" placeholder="e.g. Fridge item" required /></label>
               <label>Emoji <span class="muted tiny">(or upload an image instead)</span><input id="flag-emoji" maxlength="8" placeholder="e.g. ❄️" /></label>
@@ -281,7 +281,7 @@
                 <button class="btn primary" type="submit">Add flag</button>
               </div>
             </form>
-            <div class="table-card"><table><thead><tr><th>Icon</th><th>Label</th><th>Colour</th><th>Order</th><th></th></tr></thead><tbody id="flag-body"></tbody></table></div>
+            <div class="table-card"><table><thead><tr><th>Icon</th><th>Label</th><th>Badge colour</th><th title="The sequence flags appear in — lowest number first">Display order</th><th></th></tr></thead><tbody id="flag-body"></tbody></table></div>
 
             <div class="bulk-import">
               <h4>Bulk import icons</h4>
@@ -344,15 +344,15 @@
         </div>
       </div>
       <div id="suspend-panel" class="panel compact hidden"><h3>Suspend prescription</h3><div class="search-row"><select id="suspend-reason"></select><input id="suspend-note" placeholder="Note (required if 'Other')" /><button id="suspend-btn" class="btn danger">Suspend</button></div></div>
+      <div id="flags-panel" class="panel compact hidden">
+        <h3>Flags</h3>
+        <p class="muted tiny">Search to add a flag, or click the × on a chip to remove one. Saving replaces the whole set, so removing them all clears the prescription's flags.</p>
+        <div id="rx-flag-picker" class="flag-picker"></div>
+        <button id="flags-save-btn" class="btn secondary" type="button" style="margin-top:10px">Save flags</button>
+      </div>
       <div id="correction-send-panel" class="panel compact hidden"><h3>Send back for correction</h3><div class="search-row"><select id="correction-send-reason"></select><input id="correction-send-note" placeholder="Note (optional)" /><button id="correction-send-btn" class="btn danger">Send back</button></div></div>
       <details class="rx-more">
         <summary>More options</summary>
-        <button id="flags-toggle-btn" class="btn ghost hidden" type="button">Change flags…</button>
-        <div id="flags-panel" class="panel compact hidden">
-          <h3>Flags</h3>
-          <div id="rx-flag-picker" class="flag-picker"></div>
-          <button id="flags-save-btn" class="btn secondary" type="button" style="margin-top:10px">Save flags</button>
-        </div>
         <button id="destination-toggle-btn" class="btn ghost hidden" type="button">Change ward / hospital destination…</button>
         <div id="destination-panel" class="panel compact hidden">
           <h3>Change ward / hospital destination</h3>
@@ -402,6 +402,6 @@
     </form>
   </dialog>
 
-  <script src="js/app.js?v=2.27"></script>
+  <script src="js/app.js?v=2.30"></script>
 </body>
 </html>

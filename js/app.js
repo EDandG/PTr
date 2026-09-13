@@ -15,6 +15,7 @@ const ICONS = {
   checkSmall: '<svg viewBox="0 0 24 24" width="13" height="13" fill="currentColor"><path d="M9 16.17 4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z"/></svg>',
   pause: '<svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor"><path d="M6 5h4v14H6zm8 0h4v14h-4z"/></svg>',
   undo: '<svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor"><path d="M12.5 8c-2.65 0-5.05.99-6.9 2.6L2 7v9h9l-3.62-3.62c1.39-1.16 3.16-1.88 5.12-1.88 3.54 0 6.55 2.31 7.6 5.5l2.37-.78C21.08 11.03 17.15 8 12.5 8z"/></svg>',
+  tag: '<svg viewBox="0 0 24 24" width="17" height="17" fill="currentColor"><path d="M21.41 11.58l-9-9A2 2 0 0 0 11 2H4a2 2 0 0 0-2 2v7a2 2 0 0 0 .59 1.42l9 9a2 2 0 0 0 2.82 0l7-7a2 2 0 0 0 0-2.84zM6.5 8A1.5 1.5 0 1 1 8 6.5 1.5 1.5 0 0 1 6.5 8z"/></svg>',
 };
 
 // Tickable clinical permissions - any account with can_manage_users may grant these.
@@ -795,7 +796,6 @@ async function openPrescription(id){
   renderFacts(rx); renderStepper(rx);
   hideActionConfirm();
   await renderActions(rx); await loadTimeline(id);
-  $('flags-toggle-btn').classList.toggle('hidden', !((can('perm_progress_standard')||can('perm_book_in')) && state.prescriptionFlags.length));
   $('flags-panel').classList.add('hidden');
   $('destination-toggle-btn').classList.toggle('hidden', !(can('perm_progress_standard') && (rx.state==='active'||rx.state==='suspended')));
   $('destination-panel').classList.add('hidden');
@@ -856,13 +856,25 @@ async function renderActions(rx){
   if(can('perm_suspend')){
     const s=document.createElement('button'); s.type='button'; s.className='icon-btn-lg'; s.title='Suspend';
     s.innerHTML=ICONS.pause;
-    s.onclick=(ev)=>{ ev.stopPropagation(); hideActionConfirm(); $('correction-send-panel').classList.add('hidden'); $('suspend-panel').classList.toggle('hidden'); syncSuspendOtherRequirement(); };
+    s.onclick=(ev)=>{ ev.stopPropagation(); hideActionConfirm(); $('flags-panel').classList.add('hidden'); $('correction-send-panel').classList.add('hidden'); $('suspend-panel').classList.toggle('hidden'); syncSuspendOtherRequirement(); };
     box.appendChild(s);
+  }
+  if((can('perm_progress_standard')||can('perm_book_in')) && state.prescriptionFlags.length){
+    const g=document.createElement('button'); g.type='button'; g.className='icon-btn-lg'; g.title='Add or remove flags';
+    g.innerHTML=ICONS.tag;
+    g.onclick=(ev)=>{
+      ev.stopPropagation(); hideActionConfirm();
+      $('suspend-panel').classList.add('hidden'); $('correction-send-panel').classList.add('hidden');
+      const opening = $('flags-panel').classList.contains('hidden');
+      $('flags-panel').classList.toggle('hidden');
+      if(opening && state.currentRx) renderFlagPicker('rx-flag-picker', (state.currentRx.flag_list||[]).map(f=>f.id));
+    };
+    box.appendChild(g);
   }
   if(rx.stage_code==='awaiting_final_check' && can('perm_progress_pharmacist')){
     const u=document.createElement('button'); u.type='button'; u.className='icon-btn-lg'; u.title='Send back for correction';
     u.innerHTML=ICONS.undo;
-    u.onclick=(ev)=>{ ev.stopPropagation(); hideActionConfirm(); $('suspend-panel').classList.add('hidden'); $('correction-send-panel').classList.toggle('hidden'); };
+    u.onclick=(ev)=>{ ev.stopPropagation(); hideActionConfirm(); $('suspend-panel').classList.add('hidden'); $('flags-panel').classList.add('hidden'); $('correction-send-panel').classList.toggle('hidden'); };
     box.appendChild(u);
   }
 }
@@ -1646,22 +1658,78 @@ async function deactivateFlag(id){
   toast(`${f?.name||'Flag'} removed`); await loadReference(); await loadQueue();
 }
 // Flag pickers - one on the booking form, one in the popup.
+// Searchable multi-select for flags. Replaces the flat checkbox list,
+// which stopped being workable once more than a handful of flags existed
+// - every flag was always on screen and you had to hunt visually.
+// Selection lives in this Map rather than in the DOM, so the chips and
+// the filtered option list can re-render freely without losing state.
+const flagSelections = new Map();   // containerId -> Set of flag ids
+
 function renderFlagPicker(containerId, selectedIds=[]){
   const box=$(containerId); if(!box) return;
-  if(!state.prescriptionFlags.length){ box.innerHTML='<span class="muted tiny">No flags configured yet.</span>'; return; }
-  box.innerHTML = state.prescriptionFlags.map(f=>
-    `<label class="flag-option"><input type="checkbox" value="${f.id}" ${selectedIds.includes(f.id)?'checked':''}> ${flagIconHtml(f,15)} <span>${esc(f.name)}</span></label>`
-  ).join('');
+  flagSelections.set(containerId, new Set(selectedIds));
+  if(!state.prescriptionFlags.length){
+    box.innerHTML='<span class="muted tiny">No flags configured yet — add some in Configuration → Flags.</span>';
+    return;
+  }
+  box.innerHTML = `
+    <div class="flag-select">
+      <div class="flag-chosen" data-role="chosen"></div>
+      <input type="text" class="flag-search" data-role="search" placeholder="Search flags…" autocomplete="off" />
+      <div class="flag-options hidden" data-role="options"></div>
+    </div>`;
+  const search = box.querySelector('[data-role=search]');
+  const options = box.querySelector('[data-role=options]');
+
+  const paintOptions = ()=>{
+    const term = search.value.trim().toLowerCase();
+    const chosen = flagSelections.get(containerId);
+    const list = state.prescriptionFlags.filter(f=>!term || f.name.toLowerCase().includes(term));
+    options.innerHTML = list.length
+      ? list.map(f=>`<button type="button" class="flag-opt${chosen.has(f.id)?' is-chosen':''}" data-flag-id="${f.id}">${flagIconHtml(f,16)} <span>${esc(f.name)}</span>${chosen.has(f.id)?'<em>selected</em>':''}</button>`).join('')
+      : '<div class="muted tiny" style="padding:8px 10px">No flags match.</div>';
+  };
+  const paintChosen = ()=>{
+    const chosen = flagSelections.get(containerId);
+    const box2 = box.querySelector('[data-role=chosen]');
+    const picked = state.prescriptionFlags.filter(f=>chosen.has(f.id));
+    box2.innerHTML = picked.length
+      ? picked.map(f=>`<span class="flag-chip" style="border-color:${esc(f.colour||'#0c5cab')};color:${esc(f.colour||'#0c5cab')}">${flagIconHtml(f,14)} ${esc(f.name)}<button type="button" class="flag-chip-x" data-remove-flag="${f.id}" aria-label="Remove ${esc(f.name)}">&times;</button></span>`).join('')
+      : '<span class="muted tiny">None selected</span>';
+  };
+  const repaint = ()=>{ paintChosen(); paintOptions(); };
+
+  box.addEventListener('click', (ev)=>{
+    const opt = ev.target.closest('[data-flag-id]');
+    const rm  = ev.target.closest('[data-remove-flag]');
+    const chosen = flagSelections.get(containerId);
+    if(rm){ ev.preventDefault(); chosen.delete(rm.dataset.removeFlag); repaint(); return; }
+    if(opt){
+      ev.preventDefault();
+      // Clicking a selected option toggles it off, so the dropdown itself
+      // can remove as well as add.
+      if(chosen.has(opt.dataset.flagId)) chosen.delete(opt.dataset.flagId);
+      else chosen.add(opt.dataset.flagId);
+      repaint(); search.focus(); return;
+    }
+  });
+  search.addEventListener('focus', ()=>{ options.classList.remove('hidden'); paintOptions(); });
+  search.addEventListener('input', ()=>{ options.classList.remove('hidden'); paintOptions(); });
+  search.addEventListener('keydown', (ev)=>{
+    if(ev.key==='Escape'){ options.classList.add('hidden'); search.blur(); }
+    if(ev.key==='Enter'){
+      ev.preventDefault();   // don't submit the booking form mid-search
+      const first = options.querySelector('[data-flag-id]');
+      if(first) first.click();
+    }
+  });
+  // Close the list when focus leaves the whole control, not just the input
+  document.addEventListener('click', (ev)=>{ if(!box.contains(ev.target)) options.classList.add('hidden'); });
+  repaint();
 }
 function selectedFlagIds(containerId){
-  return [...document.querySelectorAll(`#${containerId} input[type=checkbox]:checked`)].map(c=>c.value);
+  return [...(flagSelections.get(containerId) || [])];
 }
-$('flags-toggle-btn').addEventListener('click', ()=>{
-  $('flags-panel').classList.toggle('hidden');
-  if(!$('flags-panel').classList.contains('hidden') && state.currentRx){
-    renderFlagPicker('rx-flag-picker', (state.currentRx.flag_list||[]).map(f=>f.id));
-  }
-});
 $('flags-save-btn').addEventListener('click', async(ev)=>{
   if(!state.currentRx) return;
   await withButtonGuard(ev.currentTarget, async()=>{

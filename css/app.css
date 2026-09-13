@@ -399,3 +399,28 @@ tr.bucket-heading .group-count{font-weight:800;color:#cfe3f5!important;text-tran
 .bulk-import{margin-top:18px;border-top:1px dashed var(--line);padding-top:16px}
 .bulk-import h4{margin:0 0 6px;font-size:13px;font-weight:800;text-transform:uppercase;letter-spacing:.06em;color:var(--muted)}
 .bulk-import code{background:#eef6fb;padding:1px 5px;border-radius:3px;font-size:12px}
+
+/* Colour pickers were inheriting the generic text-input rules (padding,
+   line-height, border) which collapsed the swatch into a thin line.
+   Give them explicit swatch dimensions instead. */
+input[type=color]{
+  -webkit-appearance:none;appearance:none;
+  width:46px;height:32px;padding:2px;border:1px solid var(--line);
+  border-radius:3px;background:#fff;cursor:pointer;vertical-align:middle
+}
+input[type=color]::-webkit-color-swatch-wrapper{padding:0}
+input[type=color]::-webkit-color-swatch{border:0;border-radius:2px}
+input[type=color]::-moz-color-swatch{border:0;border-radius:2px}
+
+/* Searchable flag multi-select (replaces the flat checkbox list) */
+.flag-select{position:relative;border:1px solid var(--line);border-radius:3px;background:#fff;padding:8px}
+.flag-chosen{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:8px;min-height:24px;align-items:center}
+.flag-chip{display:inline-flex;align-items:center;gap:6px;border:1px solid;border-radius:20px;padding:3px 6px 3px 10px;font-size:12px;font-weight:800;background:#fff}
+.flag-chip-x{border:0;background:transparent;color:inherit;font-size:16px;line-height:1;cursor:pointer;padding:0 4px;opacity:.65}
+.flag-chip-x:hover{opacity:1}
+.flag-search{width:100%;border:0;border-top:1px solid var(--line);padding:8px 4px 2px;outline:none;font:inherit}
+.flag-options{position:absolute;left:0;right:0;top:100%;z-index:20;background:#fff;border:1px solid var(--line);border-radius:3px;box-shadow:0 12px 28px rgba(4,37,75,.18);max-height:240px;overflow-y:auto;margin-top:4px}
+.flag-opt{display:flex;align-items:center;gap:8px;width:100%;border:0;background:transparent;padding:9px 12px;font:inherit;font-size:13px;font-weight:700;color:var(--navy-deep);cursor:pointer;text-align:left}
+.flag-opt:hover{background:var(--cyan-soft)}
+.flag-opt.is-chosen{background:#f3f8fc}
+.flag-opt em{margin-left:auto;font-style:normal;font-size:11px;font-weight:700;color:var(--muted)}
