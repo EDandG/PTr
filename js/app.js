@@ -71,9 +71,17 @@ async function fnError(data, error){
     if(body?.error) return body.error;
   } catch { /* body wasn't JSON - fall through */ }
   const status = error.context?.status;
-  if(status === 404) return 'That Edge Function is not deployed to this Supabase project yet.';
+  if(status === 404) return 'That Edge Function is not deployed to this Supabase project yet. Check Dashboard → Edge Functions.';
   if(status === 401 || status === 403) return 'Not authorised — check you are signed in with the right account.';
-  return error.message || 'Unknown error';
+  // Last resort: try the body as plain text, then at least report the
+  // status code. Falling back to error.message alone just repeats
+  // supabase-js's useless "non-2xx status code" string, which tells the
+  // user nothing about what actually failed.
+  try {
+    const text = (await error.context?.text?.())?.slice(0, 300);
+    if(text) return `Server error${status?` (${status})`:''}: ${text}`;
+  } catch { /* body unreadable */ }
+  return `Edge Function failed${status?` with status ${status}`:''} — check its logs in Supabase → Edge Functions.`;
 }
 async function withButtonGuard(btn, fn){
   if(!btn || btn.disabled) return;
