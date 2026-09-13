@@ -1042,9 +1042,33 @@ async function searchHistory(){
   let q=sb.from('prescription_queue_view').select('*').order('received_at',{ascending:false}).limit(200); const term=$('history-search').value.trim(); const st=$('history-state').value;
   if(st) q=q.eq('state',st); if(term) q=q.ilike('hospital_number',`%${term.replace(/[%_,]/g,'')}%`);
   const {data,error}=await q; if(error){toast(error.message,true);return;}
-  $('history-body').innerHTML=(data||[]).map(r=>`<tr class="row-clickable" data-open-rx="${r.id}"><td data-label="ID">#${r.display_id}</td><td data-label="Hospital no.">${esc(r.hospital_number)}</td><td data-label="Ward">${esc(r.ward_name||'—')}</td><td data-label="State"><span class="state-pill">${esc(r.state)}</span></td><td data-label="Stage">${esc(r.stage_name)}</td><td data-label="Received">${fmt(r.received_at)}</td></tr>`).join('')||'<tr><td colspan="6" class="muted">No results.</td></tr>';
+  // Rendered with the same dense table, flags column and reserved caption
+  // line as the live queue, so History reads as the same system rather
+  // than a separate screen that happens to list prescriptions.
+  $('history-body').innerHTML=(data||[]).map(r=>{
+    const cap='<div class="row-caption"></div>';
+    const flagTitle=esc([...(r.flag_list||[]).map(f=>f.name), r.suspend_reason_name?`Suspended: ${r.suspend_reason_name}`:null].filter(Boolean).join(', '));
+    const flags=(r.flag_list||[]).map(f=>flagIconHtml(f,24)).join('')
+      + (r.suspend_reason_name?reasonIconHtml({emoji:r.suspend_reason_emoji,image_data_uri:r.suspend_reason_image,colour:r.suspend_reason_colour},24):'');
+    // Who signed it off and when - the question History is usually opened
+    // to answer. Falls back to an em dash for anything never checked
+    // (cancelled, or still in progress).
+    const checked = r.checked_by_name
+      ? `<strong>${esc(r.checked_by_name)}</strong><div class="row-caption"><small class="muted">${fmt(r.checked_at)}</small></div>`
+      : `<span class="muted">—</span>${cap}`;
+    return `<tr class="row-clickable${r.state==='suspended'?' row-suspended':''}" data-open-rx="${r.id}">`+
+      `<td data-label="ID">#${r.display_id}${cap}</td>`+
+      `<td data-label="Flags" class="flag-cell" title="${flagTitle}">${flags}${cap}</td>`+
+      `<td data-label="Hospital no."><strong>${esc(r.hospital_number)}</strong>${cap}</td>`+
+      `<td data-label="Ward">${esc(r.ward_name||'—')}${cap}</td>`+
+      `<td data-label="Type">${esc(r.prescription_type_name||'—')}${cap}</td>`+
+      `<td data-label="State"><span class="state-pill state-${esc(r.state)}">${esc(r.state)}</span>${cap}</td>`+
+      `<td data-label="Checked by">${checked}</td>`+
+      `<td data-label="Received">${fmt(r.received_at)}${cap}</td></tr>`;
+  }).join('')||'<tr><td colspan="8" class="muted">No results.</td></tr>';
   document.querySelectorAll('#history-body [data-open-rx]').forEach(tr=>tr.addEventListener('click',()=>openPrescription(tr.dataset.openRx)));
 }
+
 
 /* ---------- Responsible Pharmacist ---------- */
 async function loadRP(){

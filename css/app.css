@@ -105,6 +105,15 @@ tbody tr{transition:background .12s ease}tbody tr:hover{background:#f3faff}
 
 .kpi{display:inline-flex;align-items:center;gap:6px;font-weight:800;text-transform:capitalize}.dot{width:9px;height:9px;border-radius:50%;display:inline-block}.dot.green{background:var(--green)}.dot.amber{background:var(--amber)}.dot.red{background:var(--red)}.dot.suspended{background:var(--susp)}
 .state-pill{padding:4px 8px;border-radius:2px;background:#edf5fa;border:1px solid #d7e8f2;font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:.04em;color:#33587d}
+/* State colours mirror the live queue's language so History reads the
+   same way: green = finished cleanly, purple = suspended, red = cancelled,
+   blue = still moving. */
+.state-pill.state-ready{background:#e9f7ec;border-color:#bde3c5;color:#22702f}
+.state-pill.state-collected{background:#e9f7ec;border-color:#bde3c5;color:#22702f}
+.state-pill.state-dispatched{background:#e6f4f4;border-color:#b6dedd;color:#0f6b6b}
+.state-pill.state-suspended{background:#f2effa;border-color:#ded6f3;color:#4b3d90}
+.state-pill.state-cancelled{background:#fdecea;border-color:#f3b8b2;color:#8a231c}
+.state-pill.state-active{background:#eaf3fd;border-color:#c6dff7;color:#1a4f8a}
 .icon-btn{border:0;background:transparent;color:var(--muted);width:34px;height:34px;border-radius:50%;display:grid;place-items:center;transition:background .15s ease,color .15s ease}
 .icon-btn:hover{background:#eef6fb;color:var(--navy)}
 

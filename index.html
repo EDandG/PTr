@@ -13,7 +13,7 @@
   <link rel="icon" type="image/png" sizes="32x32" href="favicon-32.png" />
   <link rel="icon" type="image/png" sizes="16x16" href="favicon-16.png" />
   <link rel="apple-touch-icon" href="apple-touch-icon.png" />
-  <link rel="stylesheet" href="css/app.css?v=2.34" />
+  <link rel="stylesheet" href="css/app.css?v=2.37" />
   <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; connect-src 'self' https://*.supabase.co wss://*.supabase.co; img-src 'self' data:; frame-ancestors 'none'; base-uri 'self'; form-action 'self'; object-src 'none'">
   <script src="./vendor/supabase-js.min.js"></script>
   <script src="./vendor/xlsx.full.min.js"></script>
@@ -126,7 +126,7 @@
       <section id="view-history" class="view">
         <div class="page-head"><div><h2>History</h2><p class="muted">Search tracked prescriptions</p></div></div>
         <div class="panel search-row"><input id="history-search" placeholder="Hospital number" /><select id="history-state"><option value="">All states</option><option>active</option><option>suspended</option><option>ready</option><option>collected</option><option>dispatched</option><option>cancelled</option></select><button id="history-btn" class="btn secondary">Search</button></div>
-        <div class="table-card"><table><thead><tr><th>ID</th><th>Hospital no.</th><th>Ward</th><th>State</th><th>Stage</th><th>Received</th></tr></thead><tbody id="history-body"></tbody></table></div>
+        <div class="table-card dense"><table class="dense"><thead><tr><th>ID</th><th>Flags</th><th>Hospital no.</th><th>Ward</th><th>Type</th><th>State</th><th>Checked by</th><th>Received</th></tr></thead><tbody id="history-body"></tbody></table></div>
       </section>
 
       <section id="view-users" class="view">
@@ -412,6 +412,6 @@
     </form>
   </dialog>
 
-  <script src="js/app.js?v=2.34"></script>
+  <script src="js/app.js?v=2.37"></script>
 </body>
 </html>
