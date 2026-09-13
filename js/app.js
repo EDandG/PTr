@@ -57,6 +57,24 @@ function toast(msg, error=false){ const t=$('toast'); t.textContent=msg; t.class
 // re-checks state before acting), so this is about a clean single
 // response rather than data safety - but a friendly result beats a
 // confusing extra error toast from a click that arrived a moment too late.
+// supabase-js reports any non-2xx from an Edge Function as the unhelpful
+// "Edge Function returned a non-2xx status code" and leaves data null -
+// the actual reason ("Username already taken", "column does not exist",
+// a 404 because the function was never deployed) sits in the response
+// body on error.context. Pull it out so users see the real cause instead
+// of a generic string that's impossible to act on.
+async function fnError(data, error){
+  if(data?.error) return data.error;
+  if(!error) return null;
+  try {
+    const body = await error.context?.json();
+    if(body?.error) return body.error;
+  } catch { /* body wasn't JSON - fall through */ }
+  const status = error.context?.status;
+  if(status === 404) return 'That Edge Function is not deployed to this Supabase project yet.';
+  if(status === 401 || status === 403) return 'Not authorised — check you are signed in with the right account.';
+  return error.message || 'Unknown error';
+}
 async function withButtonGuard(btn, fn){
   if(!btn || btn.disabled) return;
   btn.disabled=true;
@@ -164,11 +182,7 @@ $('force-password-form').addEventListener('submit', async e=>{
     // and leaves data null - the real reason ("password too short",
     // "choose a different password") is in the response body, which
     // matters a lot on this screen, so read it out of error.context.
-    let serverError = data?.error || null;
-    if(error && !serverError){
-      try { serverError = (await error.context?.json())?.error; } catch { /* fall through */ }
-      serverError = serverError || 'Could not set your password. Please try again.';
-    }
+    const serverError = await fnError(data, error);
     if(serverError){ $('force-password-error').textContent=serverError; return; }
     toast('Password set — signing you in');
     // Re-read the session and re-enter properly; the profile's permissions
@@ -1110,7 +1124,7 @@ async function quickToggleActive(id){
   const u=state.users.find(x=>x.id===id); if(!u) return;
   const nextActive=!u.active;
   const {data,error}=await sb.functions.invoke('manage-user',{body:{user_id:id, active:nextActive}});
-  if(error||data?.error){ toast(data?.error||error.message,true); return; }
+  const msg=await fnError(data,error); if(msg){ toast(msg,true); return; }
   toast(`${u.display_name} ${nextActive?'reactivated':'suspended'}`); await loadUsers();
 }
 // Shows a generated temporary password in a proper dialog rather than a
@@ -1145,7 +1159,7 @@ async function quickResetPassword(id){
   const u=state.users.find(x=>x.id===id); if(!u) return;
   const pwd=generateTempPassword();
   const {data,error}=await sb.functions.invoke('manage-user',{body:{user_id:id, password:pwd}});
-  if(error||data?.error){ toast(data?.error||error.message,true); return; }
+  const msg=await fnError(data,error); if(msg){ toast(msg,true); return; }
   showTempPassword(u.username, pwd);
   toast('Password reset — user must set their own on next sign-in');
   await loadUsers();
@@ -1157,7 +1171,7 @@ $('create-user-form').addEventListener('submit',async e=>{
   if(role==='pharmacist' && !gphc){ toast('GPhC number is required for a Pharmacist account',true); return; }
   const permissions = collectPerms('up');
   const {data,error}=await sb.functions.invoke('create-user',{body:{username:$('user-username').value,display_name:$('user-display').value,role,password:$('user-password').value,dispensary_ids:ids,permissions,gphc_number:gphc||null}});
-  if(error||data?.error){toast(data?.error||error.message,true);return;}
+  const msg=await fnError(data,error); if(msg){toast(msg,true);return;}
   e.target.reset(); document.querySelectorAll('#user-perms-clinical input').forEach(c=>c.checked=false); syncRoleDependentUI('up');
   toast(`User ${data.username} created`);await loadUsers();
 });
@@ -1184,7 +1198,7 @@ $('manage-user-form').addEventListener('submit', async e=>{
   const body={ user_id:id, display_name:$('mu-display').value, role, active:$('mu-active').checked, dispensary_ids:ids, permissions, gphc_number:gphc };
   if($('mu-password').value) body.password=$('mu-password').value;
   const {data,error}=await sb.functions.invoke('manage-user',{body});
-  if(error||data?.error){toast(data?.error||error.message,true);return;}
+  const msg=await fnError(data,error); if(msg){toast(msg,true);return;}
   toast('User updated'); $('manage-user-dialog').close(); await loadUsers();
 });
 
